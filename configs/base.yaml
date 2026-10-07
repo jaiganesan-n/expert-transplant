@@ -1,0 +1,85 @@
+# Default configuration: Gemma 3 1B with all 26 FFNs replaced by MobileMoE-M's MoE blocks,
+# trained on the MacBook Air M5 GPU (PyTorch MPS, bf16).
+# Compose with a stage config: --config configs/base.yaml --config configs/stages/stage1_test.yaml
+include:
+  - pairs/primary.yaml
+  - data/mobilemoe_pretrain_mix.yaml
+  - hardware/mac_m5.yaml
+
+run:
+  name: default
+  experiment: ""
+  out_dir: runs
+  seed: 0
+  tokens: 1_000_000     # training tokens in this run, each read once (Stage 1: 1M; Stage 2: 20M)
+  local_share: 0.25     # first 25% of them go to local matching, the rest to end-to-end training
+  extend_from: null     # a finished run's folder: continue its projections and data stream with `tokens` more
+  notes: ""
+
+transplant:
+  inner: moe_b          # moe_b | random_moe_b (control C5) | a_ffn_bottleneck (control C6)
+  projection: linear    # linear | lowrank | mlp
+  rank: 256
+  mlp_hidden: 2048
+  init: ridge           # ridge | random
+  init_path: null       # reuse an existing ridge init file (it depends only on layers and calibration data)
+  shared_expert: true   # false = routed experts only
+  router_trainable: false   # true = MobileMoE's routers train too (in fp32)
+
+ridge:
+  batch_size: 4
+  val_every: 10         # every 10th calibration batch is held out to pick lambda
+  lambdas: [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]   # relative to mean eigenvalue of X^T X
+  target: rms_normalized    # B's MoE input, RMS-normalized per token (raw: "pre_norm")
+  max_docs: null        # null = all calibration documents (about 2M tokens)
+
+local:                  # local matching: each layer imitates Gemma's FFN, one Gemma pass for all layers
+  enabled: true
+  micro_batch: 2
+  grad_accum: 4         # 8,192 tokens per step
+  lr: 1.0e-3
+  schedule: constant
+  warmup_steps: 100     # capped at 10% of the phase's steps
+  weight_decay: 0.0
+  loss: nmse            # nmse | nmse_post_norm
+  skip_first_position: true
+  eval_after: true
+
+e2e:                    # end to end: next-token CE + beta * KL to the original Gemma
+  micro_batch: 1
+  grad_accum: 16        # 16,384 tokens per step
+  lr: 3.0e-4
+  schedule: cosine
+  warmup_frac: 0.02
+  min_lr_frac: 0.1
+  weight_decay: 0.01
+  beta_kl: 1.0
+  loss_chunk: 256       # positions per logit chunk: 256 x 262,144 fp32 logits = 0.27 GB
+  grad_checkpointing: true
+
+optim:                  # AdamW for both phases
+  name: adamw
+  betas: [0.9, 0.95]
+  eps: 1.0e-8
+  grad_clip: 1.0
+
+eval:
+  sets: [mix, wikitext103, c4]   # first set is used for the subset evals during training
+  batch_size: 1
+  every_steps: 200      # end-to-end steps between subset evals
+  subset_tokens: 250_000
+  final_tokens: 1_000_000   # per set; null = the whole set (5M tokens of the mix is slow on a laptop)
+  entropy_alarm: 0.7
+  bpb_docs: 200
+  agreement_docs: 100
+  sample_tokens: 40     # greedy continuations written to samples.md
+  sample_prompts: null  # null = the built-in five
+
+checkpoint:
+  every_steps: 200      # or every_minutes, whichever comes first
+  every_minutes: 30
+
+log:
+  every_steps: 10
+  tensorboard: false
+  runs_csv: results/runs.csv

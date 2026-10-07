@@ -1,0 +1,20 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Ridge initialization from streamed statistics}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+\hat W = \arg\min_{W}\,\lVert XW - Y\rVert_F^{2} + \lambda\lVert W\rVert_F^{2} = (X^{\top}X + \lambda I)^{-1}X^{\top}Y,
+\qquad W_{in} = \hat W^{\top}
+\\[6pt]
+X^{\top}X = \sum_{b} X_b^{\top}X_b \in \mathbb{R}^{1152\times1152}, \qquad X^{\top}Y = \sum_{b} X_b^{\top}Y_b \in \mathbb{R}^{1152\times1024},
+\qquad Y_t = \frac{h^{B}_t}{\mathrm{rms}(h^{B}_t)}
+\end{gather*}}
+\end{minipage}
+\end{document}

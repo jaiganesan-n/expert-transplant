@@ -1,0 +1,19 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} End to end: next-token loss plus KL to Gemma}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+\mathcal{L}_2 = \mathrm{CE}(y,\,p_{hyb}) + \beta\,\mathrm{KL}(p_A \,\Vert\, p_{hyb}), \qquad \beta = 1
+\\[6pt]
+= -\frac{1}{n}\sum_{t} \log p_{hyb}(y_t \mid y_{<t})
++ \frac{\beta}{n}\sum_{t}\sum_{v=0}^{262143} p_A(v \mid y_{<t})\,\log\frac{p_A(v \mid y_{<t})}{p_{hyb}(v \mid y_{<t})}
+\end{gather*}}
+\end{minipage}
+\end{document}

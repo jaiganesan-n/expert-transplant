@@ -1,0 +1,18 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} RMSNorm ignores scale}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+N(z) = \frac{z}{\sqrt{\frac{1}{d}\sum_{c=0}^{d-1} z_c^{2} + \epsilon}} \odot \gamma
+\\[6pt]
+N_B(\alpha\,W_{in}x_t) \approx N_B(W_{in}x_t), \qquad P_A(\alpha\,W_{out}m_t) \approx P_A(W_{out}m_t), \qquad \alpha > 0
+\end{gather*}}
+\end{minipage}
+\end{document}

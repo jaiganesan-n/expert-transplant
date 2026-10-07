@@ -1,0 +1,17 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Gemma's decoder layer and the FFN slot}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+h = X + P_{\mathrm{att}}\big(\mathrm{Attn}(N_{\mathrm{in}}(X))\big), \qquad
+X' = h + P_A\Big(\underbrace{\mathrm{FFN}_A(N_A(h))}_{\text{the slot the transplant takes}}\Big)
+\end{gather*}}
+\end{minipage}
+\end{document}

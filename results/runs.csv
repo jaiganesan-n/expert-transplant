@@ -1,0 +1,1 @@
+time,run_name,experiment,config_hash,git_commit,seed,layers,stage,tokens,metric_set,ppl_a,ppl_ablated,ppl_hybrid,gap_ablated_minus_a,gr,gr_ce,ppl_ratio,acc_a,acc_hybrid,min_routing_entropy,peak_gb,tokens_per_s,notes

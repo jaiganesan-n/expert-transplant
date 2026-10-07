@@ -1,0 +1,19 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Routing health and agreement}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+\tilde H = -\frac{1}{\log 60}\sum_{e=0}^{59} f_e \log f_e \;\ge\; 0.7 \;\iff\; e^{H} \ge 60^{0.7} \approx 17.6 \text{ experts in effective use}
+\\[6pt]
+J_t = \frac{\lvert \mathcal{T}^{\mathrm{hyb}}_t \cap \mathcal{T}^{B}_t\rvert}{\lvert \mathcal{T}^{\mathrm{hyb}}_t \cup \mathcal{T}^{B}_t\rvert},
+\qquad \mathbb{E}[J]_{\text{chance}} = \sum_{k=0}^{4} \frac{\binom{4}{k}\binom{56}{4-k}}{\binom{60}{4}}\cdot\frac{k}{8-k} \approx 0.039
+\end{gather*}}
+\end{minipage}
+\end{document}

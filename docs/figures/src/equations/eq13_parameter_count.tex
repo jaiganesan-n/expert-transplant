@@ -1,0 +1,21 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Counting parameters}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+\underbrace{2\cdot 1152\cdot 1024}_{W_{in},\;W_{out}} = 2{,}359{,}296 \text{ per layer}, \quad \times 26 = 61{,}341{,}696 \text{ trainable}
+\\[6pt]
+\underbrace{4\cdot 3\cdot 1024\cdot 512}_{\text{4 routed experts}} + \underbrace{3\cdot 1024\cdot 2048}_{\text{shared expert}}
++ \underbrace{60\cdot 1024}_{\text{router}} = 12{,}644{,}352 \text{ active per token per layer}
+\\[6pt]
+12{,}644{,}352 + 2{,}359{,}296 - \underbrace{23{,}887{,}872}_{\mathrm{FFN}_A\ \text{removed}} = -8{,}884{,}224 \text{ active per token per transplanted layer}
+\end{gather*}}
+\end{minipage}
+\end{document}

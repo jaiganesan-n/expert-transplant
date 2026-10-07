@@ -1,0 +1,10 @@
+# MacBook Air M5, 16 GB unified memory, PyTorch MPS (macOS 14 or later for bf16).
+# bf16 everywhere except the fp32 projections: no fp16 overflow for Gemma, no loss scaling.
+device: mps
+precision:
+  mode: manual
+  a_dtype: bfloat16
+  b_dtype: bfloat16
+  proj_dtype: float32
+  grad_scaler: false
+  attn_implementation: sdpa

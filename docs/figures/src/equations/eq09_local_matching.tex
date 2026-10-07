@@ -1,0 +1,19 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Local matching: each layer imitates Gemma's FFN}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+\mathcal{L}_1 = \frac{\sum_t \lVert \hat y_t - y_t\rVert^{2}}{\sum_t \lVert y_t\rVert^{2}}
+= \frac{\sum_t \sum_{c=0}^{1151} (\hat y_{t,c} - y_{t,c})^{2}}{\sum_t \sum_{c=0}^{1151} y_{t,c}^{2}}
+\\[6pt]
+\hat y_t = W_{out}\,\mathrm{MoE}_B\big(N_B(W_{in}x_t)\big), \qquad y_t = \mathrm{FFN}_A(x_t), \qquad \hat y = 0 \;\Rightarrow\; \mathcal{L}_1 = 1
+\end{gather*}}
+\end{minipage}
+\end{document}

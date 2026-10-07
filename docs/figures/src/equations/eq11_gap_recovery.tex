@@ -1,0 +1,22 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Gap recovery}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+\mathrm{GR} = \frac{\mathrm{ppl}_{\mathrm{ablated}} - \mathrm{ppl}_{\mathrm{hybrid}}}{\mathrm{ppl}_{\mathrm{ablated}} - \mathrm{ppl}_{A}},
+\qquad
+\mathrm{GR}_{\mathrm{CE}} = \frac{\mathrm{CE}_{\mathrm{ablated}} - \mathrm{CE}_{\mathrm{hybrid}}}{\mathrm{CE}_{\mathrm{ablated}} - \mathrm{CE}_{A}},
+\qquad \mathrm{CE} = \log \mathrm{ppl}
+\\[6pt]
+\text{example: } \mathrm{ppl}_A = 12.0,\ \mathrm{ppl}_{\mathrm{ablated}} = 14.0,\ \mathrm{ppl}_{\mathrm{hybrid}} = 12.2
+\;\Rightarrow\; \mathrm{GR} = \frac{1.8}{2.0} = 0.9
+\end{gather*}}
+\end{minipage}
+\end{document}

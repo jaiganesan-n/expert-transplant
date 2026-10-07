@@ -1,0 +1,18 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} MobileMoE's router: sigmoid scores, biased top-4, normalized and scaled}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+\hat u_t = N_B(u_t), \qquad s_t = \sigma(W_r\,\hat u_t) \in (0,1)^{60}, \qquad \mathcal{T}_t = \mathrm{TopK}(s_t + b,\,4)
+\\[6pt]
+g_{t,e} = 2.5\,\frac{s_{t,e}}{\sum_{e' \in \mathcal{T}_t} s_{t,e'}}, \quad e \in \mathcal{T}_t, \qquad \sum_{e \in \mathcal{T}_t} g_{t,e} = 2.5
+\end{gather*}}
+\end{minipage}
+\end{document}

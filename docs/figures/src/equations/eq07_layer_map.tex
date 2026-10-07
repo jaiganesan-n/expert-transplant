@@ -1,0 +1,19 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Layer map by relative depth}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+j = \mathrm{round}\Big(i\cdot\frac{L_B-1}{L_A-1}\Big)
+\\[6pt]
+\text{primary: } \frac{26-1}{26-1} = 1 \;\Rightarrow\; j = i, \qquad
+\text{fallback: } \mathrm{round}\Big(20\cdot\frac{31}{39}\Big) = \mathrm{round}(15.90) = 16
+\end{gather*}}
+\end{minipage}
+\end{document}

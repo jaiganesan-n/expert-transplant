@@ -1,0 +1,164 @@
+# The data MobileMoE-M-Base was pre-trained on: Table B.1 of Chen et al. (2026),
+# "MobileMoE: Scaling On-Device Mixture of Experts", arXiv:2605.27358, Appendix B.
+#
+#   Domain     Share   Datasets named in Table B.1
+#   Web        62.0%   DCLM, FineWeb-Edu, Common Crawl
+#   Math       11.6%   FineMath, OpenWebMath, Algebraic Stack, Nemotron Math
+#   Code       10.0%   StarCoder, Stack-Edu, Nemotron Code
+#   Knowledge  10.0%   FLAN, Cosmopedia, Wikipedia
+#   Science     6.4%   OLMoCR Science PDFs, arXiv, peS2o, Nemotron Science, Natural Reasoning
+#
+# Gemma 3's own 2T-token training data was never released, so this is the only
+# training set of the two models that can be reused.
+#
+# Domain shares follow Table B.1 exactly. The paper gives no per-dataset weights, so
+# each domain's share is split evenly over the sources enabled in it (assumption).
+# Enabled: sources that stream as plain text from Hugging Face without a login.
+# Disabled (weight 0): sources that need path checks or reformatting first; enable
+# them at M0 after `python -m transplant data-check --include-optional`.
+#
+# Size: the full mix is about 6T tokens. A run reads only its budget (10M + 20M to
+# 50M tokens) as a stream, so nothing is downloaded in full and disk use stays at the
+# held-out files (about 60 MB).
+data:
+  seq_len: 1024
+  heldout_dir: data_cache/heldout
+  heldout:
+    val_tokens: 5_000_000     # in-distribution validation, fixed, never trained on
+    calib_tokens: 2_000_000   # ridge calibration text (raw, read by both tokenizers)
+  sources:
+    # ---- Web: 62.0% ------------------------------------------------------------
+    - name: fineweb_edu
+      domain: web
+      weight: 0.310
+      hf_path: HuggingFaceFW/fineweb-edu
+      hf_name: sample-10BT
+      license: ODC-By 1.0 + Common Crawl terms
+    - name: dclm
+      domain: web
+      weight: 0.310
+      hf_path: allenai/olmo-mix-1124   # the link Table B.1 gives for DCLM
+      hf_name: dclm
+      license: ODC-By 1.0 + Common Crawl terms
+    - name: common_crawl_dolma3
+      domain: web
+      weight: 0.0
+      kind: hf_files
+      data_files: "hf://datasets/allenai/dolma3_mix-6T-1025-7B/data/common_crawl-*/*"
+      license: ODC-By 1.0
+      notes: verify file pattern and format with data-check before enabling
+    # ---- Math: 11.6% -----------------------------------------------------------
+    - name: finemath
+      domain: math
+      weight: 0.0387
+      hf_path: HuggingFaceTB/finemath
+      hf_name: finemath-3plus
+      license: ODC-By 1.0
+    - name: open_web_math
+      domain: math
+      weight: 0.0387
+      hf_path: allenai/olmo-mix-1124
+      hf_name: open-web-math
+      license: ODC-By 1.0
+    - name: algebraic_stack
+      domain: math
+      weight: 0.0386
+      hf_path: allenai/olmo-mix-1124
+      hf_name: algebraic-stack
+      license: ODC-By 1.0
+    - name: nemotron_math
+      domain: math
+      weight: 0.0
+      kind: hf_files
+      data_files: "hf://datasets/nvidia/Llama-Nemotron-Post-Training-Dataset/SFT/math/math_v1.1.jsonl"
+      formatter: chat
+      license: CC-BY-4.0
+      notes: one very large JSONL of chat records; enable after data-check
+    # ---- Code: 10.0% -----------------------------------------------------------
+    - name: starcoder
+      domain: code
+      weight: 0.100
+      hf_path: allenai/olmo-mix-1124
+      hf_name: starcoder
+      license: ODC-By 1.0 (per-file licenses from The Stack)
+    - name: stack_edu_dolma3
+      domain: code
+      weight: 0.0
+      kind: hf_files
+      data_files: "hf://datasets/allenai/dolma3_mix-6T-1025-7B/data/stack_edu*/*"
+      license: ODC-By 1.0
+      notes: verify file pattern with data-check before enabling (HuggingFaceTB/stack-edu itself holds only blob ids)
+    - name: nemotron_code
+      domain: code
+      weight: 0.0
+      kind: hf_files
+      data_files: "hf://datasets/nvidia/Llama-Nemotron-Post-Training-Dataset/SFT/code/code_v1.1.jsonl"
+      formatter: chat
+      license: CC-BY-4.0
+    # ---- Knowledge: 10.0% ------------------------------------------------------
+    - name: flan
+      domain: knowledge
+      weight: 0.0334
+      hf_path: allenai/dolmino-mix-1124
+      hf_name: flan
+      license: ODC-By 1.0
+    - name: cosmopedia
+      domain: knowledge
+      weight: 0.0333
+      hf_path: HuggingFaceTB/smollm-corpus
+      hf_name: cosmopedia-v2
+      license: ODC-By 1.0
+    - name: wikipedia
+      domain: knowledge
+      weight: 0.0333
+      hf_path: allenai/olmo-mix-1124
+      hf_name: wiki
+      license: CC-BY-SA (Wikipedia) within ODC-By collection
+    # ---- Science: 6.4% ---------------------------------------------------------
+    - name: arxiv
+      domain: science
+      weight: 0.0214
+      hf_path: allenai/olmo-mix-1124
+      hf_name: arxiv
+      license: ODC-By 1.0 (per-paper licenses)
+    - name: pes2o
+      domain: science
+      weight: 0.0213
+      hf_path: allenai/olmo-mix-1124
+      hf_name: pes2o
+      license: ODC-By 1.0
+    - name: natural_reasoning
+      domain: science
+      weight: 0.0213
+      hf_path: facebook/natural_reasoning
+      formatter: question_answer
+      license: CC-BY-NC-4.0 (non-commercial)
+    - name: olmocr_science_pdfs_dolma3
+      domain: science
+      weight: 0.0
+      kind: hf_files
+      data_files: "hf://datasets/allenai/dolma3_mix-6T-1025-7B/data/olmocr_science_pdfs*/*"
+      license: ODC-By 1.0
+      notes: verify file pattern with data-check before enabling
+    - name: nemotron_science
+      domain: science
+      weight: 0.0
+      kind: hf_files
+      data_files: "hf://datasets/nvidia/Llama-Nemotron-Post-Training-Dataset/SFT/science/science.jsonl"
+      formatter: chat
+      license: CC-BY-4.0
+
+  # Distribution-shift sets, evaluation only.
+  shift_sets:
+    - name: wikitext103
+      hf_path: Salesforce/wikitext
+      hf_name: wikitext-103-raw-v1
+      split: test
+      text_field: text
+      join_lines: true
+    - name: c4
+      hf_path: allenai/c4
+      hf_name: en
+      split: validation
+      text_field: text
+      max_tokens: 2_000_000

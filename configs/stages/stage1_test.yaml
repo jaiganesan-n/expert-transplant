@@ -1,0 +1,13 @@
+# Stage 1: test run. All 26 layers, 1M training tokens, each read once (1 epoch).
+# It checks that everything runs on the M5 (memory, speed, losses falling, checkpoint
+# and resume, evaluation, samples); its quality numbers are not the result.
+run:
+  name: stage1_test
+  experiment: stage1_test
+  tokens: 1_000_000
+ridge:
+  max_docs: 400         # a shorter ridge calibration keeps the test run short
+eval:
+  every_steps: 20
+  subset_tokens: 100_000
+  final_tokens: 250_000

@@ -1,0 +1,17 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} The MoE block's output}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+m_t = \underbrace{S(\hat u_t)}_{\substack{\text{shared, always on}\\ 1024\to2048\to1024}}
++ \sum_{e \in \mathcal{T}_t} g_{t,e}\;\underbrace{E_e(\hat u_t)}_{\substack{\text{4 of 60 routed}\\ 1024\to512\to1024}}
+\end{gather*}}
+\end{minipage}
+\end{document}

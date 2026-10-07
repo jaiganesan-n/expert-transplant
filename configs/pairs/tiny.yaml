@@ -1,0 +1,36 @@
+# Tiny stand-ins for both models (briefly pre-trained on synthetic text): tests and `python -m transplant smoke`.
+pair:
+  a: {model_id: tiny-a, seed: 0, pretrain_steps: 300}
+  b:
+    model_id: tiny-b
+    seed: 1
+    pretrain_steps: 300
+    num_experts: 6
+    top_k: 2
+    layers_path: auto
+    moe_attr: auto
+    norm_attr: auto
+    router_attr: auto
+    shared_attr: auto
+  layers: all
+  layer_map: relative_depth
+
+run: {name: smoke, experiment: smoke, tokens: 16384}
+device: cpu
+precision: {mode: auto}
+
+data:
+  seq_len: 64
+  heldout_dir: data_cache/tiny_heldout
+  heldout: {val_tokens: 4096, calib_tokens: 4096}
+  sources:
+    - {name: synth_web, kind: synthetic, seed: 11, weight: 0.6, domain: web}
+    - {name: synth_math, kind: synthetic, seed: 12, weight: 0.4, domain: math}
+  shift_sets: []
+
+ridge: {batch_size: 4}
+local: {micro_batch: 2, grad_accum: 2, warmup_steps: 2}
+e2e: {micro_batch: 2, grad_accum: 2, loss_chunk: 32}
+eval: {sets: [mix], batch_size: 4, every_steps: 8, subset_tokens: 1024, final_tokens: null, bpb_docs: 20, agreement_docs: 16, sample_tokens: 8}
+checkpoint: {every_steps: 3}
+log: {every_steps: 1}

@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# Run outputs, caches and weights stay out of git
+runs/
+data_cache/
+hf_cache/
+*.pt
+*.npy
+*.safetensors
+results/raw/
+!results/runs.csv
+
+# Local secrets (Hugging Face token and the like) never go into git
+.env

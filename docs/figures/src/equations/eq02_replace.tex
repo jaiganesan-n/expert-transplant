@@ -1,0 +1,17 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{26cm}
+{\sffamily\bfseries\Large\color{muted} Replace: one transplanted layer}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+h^{\mathrm{out}}_t = h_t + P_A\Big(\underbrace{W_{out}}_{1152\times1024}\;\mathrm{MoE}_B\big(N_B(\underbrace{W_{in}}_{1024\times1152}\,x_t)\big)\Big),
+\qquad x_t = N_A(h_t) \in \mathbb{R}^{1152}
+\end{gather*}}
+\end{minipage}
+\end{document}

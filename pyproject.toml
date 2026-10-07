@@ -1,0 +1,49 @@
+[project]
+name = "expert-transplant"
+version = "0.6.0"
+description = "Replace Gemma 3 1B's FFNs with frozen MobileMoE-M MoE blocks; train only the projections. Runs on an Apple M5 GPU."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Jai" }]
+# torch and transformers are the versions MobileMoE's model card verifies. Keep them pinned.
+dependencies = [
+    "torch==2.8.0",
+    "transformers==4.57.6",
+    "safetensors==0.7.0",
+    "accelerate==1.13.0",
+    "datasets>=3.0,<4.2",
+    "huggingface_hub>=0.34",
+    "zstandard>=0.22",
+    "pyyaml>=6.0",
+    "numpy>=1.26",
+    "tokenizers>=0.21",
+]
+
+[project.optional-dependencies]
+figures = ["matplotlib>=3.8"]
+tensorboard = ["tensorboard>=2.16"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+transplant = "transplant.cli:main"
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+# `uv sync` installs the project, its dependencies and the dev group (pytest).
+default-groups = ["dev"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "real: needs the real Gemma 3 1B and MobileMoE-M weights (Hugging Face access); run with TRANSPLANT_REAL=1",
+    "gpu: needs an accelerator (Apple MPS or CUDA)",
+]
