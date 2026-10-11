@@ -87,6 +87,29 @@ def peak_text(device: torch.device) -> str:
     return "" if gb != gb else f", peak {gb:.1f} GB"
 
 
+def process_gb() -> Optional[float]:
+    """Resident memory of this process (CPU side; on a Mac the GPU's share is reported apart)."""
+    try:
+        import psutil
+
+        return psutil.Process().memory_info().rss / GIB
+    except Exception:  # pragma: no cover - psutil missing
+        return None
+
+
+def memory_text(device: torch.device) -> str:
+    """'GPU 8.1 GB, process 2.3 GB' for progress lines."""
+    parts = []
+    if device.type == "mps":
+        parts.append(f"GPU {torch.mps.driver_allocated_memory() / GIB:.1f} GB")
+    elif device.type == "cuda":
+        parts.append(f"GPU {torch.cuda.memory_reserved(device) / GIB:.1f} GB")
+    proc = process_gb()
+    if proc is not None:
+        parts.append(f"process {proc:.1f} GB")
+    return ", ".join(parts) or "memory n/a"
+
+
 def empty_cache(device: torch.device) -> None:
     import gc
 

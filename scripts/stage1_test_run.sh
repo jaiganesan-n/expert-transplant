@@ -16,3 +16,4 @@ if loc and e2e:
           "plus ridge init and evaluation")
 PY
 echo "Read runs/stage1_test/samples.md, runs/stage1_test/eval.json and runs/stage1_test/metrics.jsonl"
+echo "Ask it basic questions: uv run transplant ask --run runs/stage1_test --ablated"

@@ -32,7 +32,7 @@ def test_discovery_finds_module_names():
     info = describe_layer(tiny_model_b(), TINY_B_CFG, 0)
     assert info["moe_attr"] == "mlp"
     assert info["norm_attr"] == "post_attention_layernorm"
-    assert info["router_attr"] == "gate"
+    assert info["router_attr"] == "router"
     assert info["shared_attr"] == "shared_expert"
 
 

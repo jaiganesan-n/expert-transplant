@@ -34,12 +34,19 @@ def lm_loss_on_array(
     max_rows: Optional[int] = None,
     chunk: int = 256,
     on_batch: Optional[Callable[[torch.Tensor], None]] = None,
+    desc: Optional[str] = None,
 ) -> dict:
     """Mean next-token CE and top-1 accuracy over packed (N, T) Gemma-token sequences.
-    Position 0 (<bos>) is input only."""
+    Position 0 (<bos>) is input only. ``desc`` shows a progress bar under that name."""
+    from ..utils.progress import progress_bar
+
     weight, softcap = lm_weight_and_softcap(model)
     nll, count, correct = 0.0, 0, 0
+    n_rows = min(len(array), max_rows) if max_rows else len(array)
+    bar = progress_bar(n_rows * array.shape[1], desc, leave=False) if desc else None
     for batch in iterate_batches(array, batch_size, max_rows):
+        if bar is not None:
+            bar.update(batch.numel())
         ids = batch.to(device)
         h = gemma_hidden(model, ids)
         hs, labels = shift_for_lm(h, ids)
@@ -49,6 +56,8 @@ def lm_loss_on_array(
         correct += c
         if on_batch is not None:
             on_batch(ids)
+    if bar is not None:
+        bar.close()
     ce = nll / max(count, 1)
     return {"ce": ce, "ppl": math.exp(ce), "accuracy": correct / max(count, 1), "tokens": count}
 

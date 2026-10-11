@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import inspect as pyinspect
 import json
+import statistics
 import time
 from pathlib import Path
 
@@ -152,14 +153,18 @@ def data_check(cfg: dict, n_docs: int, include_optional: bool, log=print) -> lis
     return rows
 
 
-def memory_check(cfg: dict, micro_steps: int = 2, log=print) -> dict:
+def memory_check(cfg: dict, micro_steps: int = 2, log=print, e2e_only: bool = False) -> dict:
     """Memory and speed of real training steps, with the run's own settings.
 
     Builds the hybrid (all transplanted layers), then runs ``micro_steps`` local-matching
-    micro-batches and ``micro_steps`` end-to-end micro-batches, each followed by an AdamW
-    step, exactly as training does. Token ids are random: memory and speed do not depend
+    micro-batches (skipped with ``e2e_only``) and ``micro_steps`` end-to-end micro-batches,
+    each followed by an AdamW step. Token ids are random: memory and speed do not depend
     on the text. Run it in a fresh process (``transplant memcheck``) so nothing loaded
     earlier inflates the numbers.
+
+    ``e2e.train_tokens_per_s`` estimates training speed with the run's micro-batch and
+    gradient accumulation: one optimizer step per ``grad_accum`` micro-batches, micro-batch
+    time = the median over the micro-batches after the first (which compiles kernels).
     """
     from .models import surgery
     from .models.capture import capture_ffn_io, run_until
@@ -167,7 +172,8 @@ def memory_check(cfg: dict, micro_steps: int = 2, log=print) -> dict:
     from .train.losses import chunked_ce_kl, nmse, shift_for_lm
     from .train.optim import make_optimizer
     from .train.run import setup
-    from .utils.memory import empty_cache, live_gb, peak_gb, peak_live_gb, recommended_max_gb, reset_peak, track_peak
+    from .utils.memory import (empty_cache, live_gb, peak_gb, peak_live_gb, process_gb, recommended_max_gb, reset_peak,
+                               track_peak)
 
     device, policy = setup(cfg)
 
@@ -184,7 +190,7 @@ def memory_check(cfg: dict, micro_steps: int = 2, log=print) -> dict:
     slots = surgery.slots(model)
     reset_peak(device)
     res: dict = {"device": str(device), "transplanted_layers": len(slots), "load_s": round(time.time() - t_load, 1),
-                 "weights_gb": round(live_gb(device), 2)}
+                 "weights_gb": round(live_gb(device), 2), "moe_forward": cfg["pair"]["b"].get("moe_forward", "bucketed")}
     log(f"[memcheck] {len(slots)} layers on {device}; weights {res['weights_gb']:.2f} GB")
     opt = make_optimizer(surgery.trainable_parameters(model), 1e-5, 0.0, cfg["optim"])
     seq = int(cfg["data"]["seq_len"])
@@ -200,7 +206,7 @@ def memory_check(cfg: dict, micro_steps: int = 2, log=print) -> dict:
     mb = int(cfg["local"]["micro_batch"])
     model.eval()
     seconds = []
-    for _ in range(micro_steps):
+    for _ in range(0 if e2e_only else micro_steps):
         ids = batch(mb)
         sync()
         t = time.time()
@@ -216,12 +222,13 @@ def memory_check(cfg: dict, micro_steps: int = 2, log=print) -> dict:
         track_peak(device)
         sync()
         seconds.append(time.time() - t)
-    res["local"] = {"micro_batch": mb, "seconds_per_micro_batch": round(seconds[-1], 2),
-                    "tokens_per_s": round(mb * seq / seconds[-1]), "peak_gb": round(peak_gb(device), 2),
-                    "peak_live_gb": round(peak_live_gb(device), 2)}
-    log(f"[memcheck] local matching: {res['local']}")
-    empty_cache(device)  # training also frees cached blocks between the phases
-    reset_peak(device)
+    if seconds:
+        res["local"] = {"micro_batch": mb, "seconds_per_micro_batch": round(seconds[-1], 2),
+                        "tokens_per_s": round(mb * seq / seconds[-1]), "peak_gb": round(peak_gb(device), 2),
+                        "peak_live_gb": round(peak_live_gb(device), 2)}
+        log(f"[memcheck] local matching: {res['local']}")
+        empty_cache(device)  # training also frees cached blocks between the phases
+        reset_peak(device)
 
     # End to end: teacher pass (no grad), hybrid pass with checkpointing, chunked CE + KL, backward.
     ec = cfg["e2e"]
@@ -230,13 +237,15 @@ def memory_check(cfg: dict, micro_steps: int = 2, log=print) -> dict:
     if ec.get("grad_checkpointing", True) and hasattr(model, "gradient_checkpointing_enable"):
         model.gradient_checkpointing_enable(gradient_checkpointing_kwargs={"use_reentrant": False})
     surgery.train_mode(model)
-    seconds = []
+    seconds, parts, micro, opt_s = [], {}, [], []
     for _ in range(micro_steps):
         ids = batch(mb)
         sync()
         t = time.time()
         with torch.no_grad(), surgery.mode(model, "original"):
             h_t = model.model(input_ids=ids, use_cache=False).last_hidden_state[:, :-1]
+        sync()
+        t_teacher = time.time()
         with surgery.mode(model, "transplant"):
             h_s = model.model(input_ids=ids, use_cache=False).last_hidden_state
         track_peak(device)
@@ -244,21 +253,40 @@ def memory_check(cfg: dict, micro_steps: int = 2, log=print) -> dict:
         ce, kl, n = chunked_ce_kl(hs, labels, model.lm_head.weight, h_teacher=h_t, beta=beta, chunk=chunk,
                                   softcap=softcap)
         track_peak(device)
+        sync()
+        t_forward = time.time()
         ((ce + beta * kl) / n).backward()
         track_peak(device)
+        sync()
+        t_backward = time.time()
         del h_t, h_s, hs, ce, kl
         opt.step()
         opt.zero_grad(set_to_none=True)
         track_peak(device)
         sync()
         seconds.append(time.time() - t)
-    res["e2e"] = {"micro_batch": mb, "loss_chunk": chunk, "seconds_per_micro_batch": round(seconds[-1], 2),
-                  "tokens_per_s": round(mb * seq / seconds[-1]), "peak_gb": round(peak_gb(device), 2),
-                  "peak_live_gb": round(peak_live_gb(device), 2)}
+        micro.append(t_backward - t)
+        opt_s.append(time.time() - t_backward)
+        # where the time goes (backward includes recomputing the checkpointed forward)
+        parts = {"teacher_forward": round(t_teacher - t, 2), "hybrid_forward_and_loss": round(t_forward - t_teacher, 2),
+                 "backward": round(t_backward - t_forward, 2), "optimizer": round(time.time() - t_backward, 2)}
+    accum = int(ec.get("grad_accum", 1))
+    warm = micro[1:] or micro  # the first micro-batch compiles kernels
+    t_micro = statistics.median(warm)
+    t_opt = statistics.median(opt_s[1:] or opt_s)
+    res["e2e"] = {"micro_batch": mb, "grad_accum": accum, "loss_chunk": chunk,
+                  "grad_checkpointing": bool(ec.get("grad_checkpointing", True)),
+                  "seconds_per_micro_batch": round(seconds[-1], 2),
+                  "tokens_per_s": round(mb * seq / seconds[-1]), "seconds": parts,
+                  "train_tokens_per_s": round(mb * seq * accum / (accum * t_micro + t_opt), 1),
+                  "peak_gb": round(peak_gb(device), 2), "peak_live_gb": round(peak_live_gb(device), 2)}
     log(f"[memcheck] end to end: {res['e2e']}")
     # driver memory: everything Metal holds, cached blocks included (what macOS must find room for)
-    res["peak_gb"] = max(res["local"]["peak_gb"], res["e2e"]["peak_gb"])
-    res["peak_live_gb"] = max(res["local"]["peak_live_gb"], res["e2e"]["peak_live_gb"])
+    phases = [res[k] for k in ("local", "e2e") if k in res]
+    res["peak_gb"] = max(x["peak_gb"] for x in phases)
+    res["peak_live_gb"] = max(x["peak_live_gb"] for x in phases)
+    proc = process_gb()
+    res["process_gb"] = round(proc, 2) if proc is not None else None  # CPU side: kernel caches, Python, data
     rec = recommended_max_gb(device)
     res["recommended_max_gb"] = round(rec, 2) if rec else None
     return res

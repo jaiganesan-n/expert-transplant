@@ -1,0 +1,24 @@
+\documentclass[border=40pt]{standalone}
+\usepackage{amsmath,amssymb,mathtools}
+\usepackage{xcolor}
+\usepackage[scaled=0.95]{helvet}
+\definecolor{bg}{HTML}{F8F8F8}
+\definecolor{muted}{HTML}{6B7280}
+\pagecolor{bg}
+\begin{document}
+\begin{minipage}{30cm}
+{\sffamily\bfseries\Large\color{muted} Stage 4: Gemma 3 1B with 20 MobileMoE-S MoE layers (spread layout)}\par\vspace{-14pt}
+{\LARGE
+\begin{gather*}
+h^{\mathrm{out}}_t = h_t + P_A\big(F_l(x_t)\big), \qquad
+F_l = \begin{cases}
+\mathrm{FFN}_A^{(l)}, & l \in \{2, 6, 10, 15, 19, 23\}\\[2pt]
+W_{out}^{(l)}\,\mathrm{MoE}_S^{(j)}\big(N_S(W_{in}^{(l)}\,\cdot\,)\big), & l = \mathrm{round}(25j/19),\ j = 0,\dots,19
+\end{cases}
+\\[12pt]
+\mathrm{MoE}_S(u) = S(u) + \sum_{e \in \mathrm{Top4}(\sigma(W_r u) + b)} g_e\,E_e(u), \qquad
+\mathcal{L} = \mathrm{CE}(y, p_{\mathrm{hyb}}) + \mathrm{KL}(p_A \,\Vert\, p_{\mathrm{hyb}}), \qquad
+\underbrace{20 \cdot 2 \cdot 1152 \cdot 768}_{\text{trainable}} = 35.4\mathrm{M}
+\end{gather*}}
+\end{minipage}
+\end{document}

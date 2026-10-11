@@ -84,6 +84,10 @@ def test_stage_budgets():
     s2 = load_config([repo / "configs" / "base.yaml", repo / "configs" / "stages" / "stage2_full.yaml"])
     assert token_budget(s1)[:2] == (250_000, 750_000)          # 1M tokens: 25% local, 75% end to end
     assert token_budget(s2)[:2] == (5_000_000, 15_000_000)     # 20M tokens
+    short = load_config([repo / "configs" / "base.yaml", repo / "configs" / "stages" / "stage2_full.yaml",
+                         repo / "configs" / "stages" / "stage2_5m.yaml"])
+    assert token_budget(short)[:2] == (0, 5_000_000)            # 5M tokens, all end to end
+    assert short.transplant.init_path == "runs/stage1_test/init.pt" and short.eval.final_tokens == 250_000
     ext = load_config([repo / "configs" / "base.yaml", repo / "configs" / "stages" / "stage2_full.yaml"],
                       ["run.extend_from=runs/stage2_full", "run.tokens=20000000"])
     local, e2e, frm = token_budget(ext)

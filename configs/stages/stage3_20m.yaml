@@ -1,0 +1,23 @@
+# Stage 3: all 26 layers to 20M training tokens in total, end to end only.
+# Applied on top of Stage 2's own settings (runs/stage2_5m/config.yaml) by scripts/stage3_run.sh,
+# so the objective (CE + 1.0 * KL to Gemma), learning rate, data mix and evaluation sizes stay
+# exactly as in Stage 2; only what is listed here changes.
+#
+# * It continues Stage 2's projections and data stream (extend_from): no token is read twice,
+#   and ridge init and local matching are not run again.
+# * Fresh AdamW state and a new cosine schedule from the same peak (3e-4, 2% warmup), as for
+#   every extension; a short loss bump while the learning rate warms up again is expected.
+# * The micro-batch is not set here: scripts/stage3_speed.py measures 1, 2, 4 and 8 on this Mac
+#   and keeps the fastest that fits in memory (runs/stage3_20m/speed.json). Every optimizer step
+#   still sees 16 sequences of 1,024 tokens, so only the speed changes, not the training.
+run:
+  name: stage3_20m
+  experiment: stage3_20m
+  extend_from: runs/stage2_5m
+  tokens: 15_000_000    # + Stage 2's 4,997,120 = 19.99M in total; 915 steps of 16,384 tokens
+eval:
+  every_steps: 100      # 9 checks on 100k held-out tokens, about 3 min each: the learning curve
+  subset_tokens: 100_000
+  final_tokens: 250_000 # same final evaluation as Stages 1 and 2, so the numbers compare directly
+checkpoint:
+  every_minutes: 10     # a power cut or crash loses at most 10 minutes (about 3 s to write, 0.5% of the time)

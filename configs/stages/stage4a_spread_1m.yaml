@@ -1,0 +1,25 @@
+# Stage 4a: Gemma 3 1B + MobileMoE-S, layout spread (20 MoE layers, 6 Gemma FFNs kept), 1M tokens.
+# A short first run: does the partial transplant train, and how does it compare with Stage 1 (1M)?
+#   bash scripts/stage4_run.sh 4a
+# Recipe as Stage 2 (ridge init, then end to end only: CE + 1.0 KL to unmodified Gemma, AdamW,
+# peak LR 3e-4, cosine, 2% warmup, 16,384 tokens per step), data as Stages 2-3: the same
+# MobileMoE pre-training mix, read from the start of the stream in the same order, each token once.
+include:
+  - ../pairs/stage4_mobilemoe_s.yaml
+run:
+  name: stage4a_spread_1m
+  experiment: stage4_spread
+  tokens: 1_000_000       # 61 steps of 16,384 tokens (999,424)
+  local_share: 0.0
+local:
+  enabled: false          # local matching did not beat ridge in Stage 1
+transplant:
+  init_path: runs/stage4_spread_init/init.pt   # ridge for MobileMoE-S on the 20 spread layers; shared by 4a and 4b
+ridge:
+  max_docs: 400           # the calibration of Stage 1 (400 documents, aligned positions only)
+eval:
+  every_steps: 20         # 3 checks on 100k held-out tokens
+  subset_tokens: 100_000
+  final_tokens: 250_000   # as Stages 1-3, so the numbers compare directly
+checkpoint:
+  every_minutes: 10

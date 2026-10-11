@@ -17,3 +17,30 @@ results/raw/
 
 # Local secrets (Hugging Face token and the like) never go into git
 .env
+
+# Local notes and run logs (for reference on this machine only)
+notes/
+
+# OS and editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Other tool caches and build output
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+
+# Logs and scratch files from runs (results that matter are in results/ and the README)
+*.log
+*.tmp
+nohup.out
+wandb/
+
+# Superseded by results/qa_compare.md
+results/ask_compare.md

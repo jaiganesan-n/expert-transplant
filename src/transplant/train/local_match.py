@@ -22,6 +22,7 @@ from ..data import training_stream
 from ..models import surgery
 from ..models.capture import capture_ffn_io, run_until
 from ..utils.memory import peak_gb, peak_text, reset_peak, track_peak
+from ..utils.progress import progress_bar, safe_log
 from .checkpoint import ckpt_due, load_checkpoint, save_checkpoint, save_projections
 from .losses import nmse
 from .optim import make_optimizer, make_scheduler, steps_for_tokens
@@ -32,6 +33,7 @@ PHASE = "local"
 def train_local(hybrid, cfg: dict, device: torch.device, run_dir: Path, logger, tokens: int,
                 resume: bool = False, log=print) -> dict:
     lc, data_cfg = cfg["local"], cfg["data"]
+    log = safe_log(log)
     if tokens <= 0:
         log("[local] skipped (no tokens assigned)")
         return {}
@@ -62,6 +64,8 @@ def train_local(hybrid, cfg: dict, device: torch.device, run_dir: Path, logger, 
     t0, tokens_done = time.time(), 0
     last_save = t0
     mean_loss = None
+    per_step = mb * accum * seq_len
+    bar = progress_bar(steps * per_step, "local matching", initial=start * per_step)
     for step in range(start, steps):
         per_layer = {i: 0.0 for i in slots}
         for _ in range(accum):
@@ -81,6 +85,7 @@ def train_local(hybrid, cfg: dict, device: torch.device, run_dir: Path, logger, 
                 per_layer[i] += float(loss.detach()) / accum
             tokens_done += ids.numel()
             track_peak(device)
+            bar.update(ids.numel())
         scaler.unscale_(opt)
         for slot in slots.values():  # layers train independently: clip each on its own
             torch.nn.utils.clip_grad_norm_(list(slot.trainable_parameters()), clip)
@@ -89,6 +94,7 @@ def train_local(hybrid, cfg: dict, device: torch.device, run_dir: Path, logger, 
         opt.zero_grad(set_to_none=True)
         sched.step()
         mean_loss = sum(per_layer.values()) / len(per_layer)
+        bar.set_postfix_str(f"step {step + 1}/{steps} L1 {mean_loss:.4f}{peak_text(device)}")
         if step % int(cfg["log"].get("every_steps", 10)) == 0 or step == steps - 1:
             rate = tokens_done / max(time.time() - t0, 1e-6)
             logger.log(step, PHASE, loss=mean_loss, lr=sched.get_last_lr()[0], tokens_per_s=rate,
@@ -98,6 +104,7 @@ def train_local(hybrid, cfg: dict, device: torch.device, run_dir: Path, logger, 
             save_checkpoint(ckpt_path, model=model, optimizer=opt, scheduler=sched, scaler=scaler,
                             step=step + 1, data_state=stream.state_dict())
             last_save = time.time()
+    bar.close()
     save_projections(run_dir / "local_projections.pt", model)
     torch.save(stream.state_dict(), run_dir / "local_data_state.pt")  # end-to-end continues the stream
     return {"local_steps": steps, "local_tokens": steps * mb * accum * seq_len, "local_final_loss": mean_loss,

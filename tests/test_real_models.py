@@ -4,11 +4,17 @@ Run on the Mac (M5, MPS) after `uv run hf auth login`, with both licenses accept
 
     TRANSPLANT_REAL=1 uv run pytest tests/test_real_models.py -v
 
+Another setup (Stage 4: MobileMoE-S, layout spread) with the configs it trains with:
+
+    TRANSPLANT_REAL=1 TRANSPLANT_REAL_CONFIG=configs/base.yaml,configs/stages/stage4a_spread_1m.yaml \
+        uv run pytest tests/test_real_models.py -v
+
 Test 5 (memory) needs the GPU (MPS or CUDA). It measures in a fresh process
 (`transplant memcheck`), so the models the other tests load cannot inflate it; between
 tests, memory is handed back to macOS.
 """
 import copy
+import os
 from pathlib import Path
 
 import pytest
@@ -39,9 +45,20 @@ def _free_memory_after_each_test():
         torch.cuda.empty_cache()
 
 
+def _config_paths() -> list[Path]:
+    spec = os.environ.get("TRANSPLANT_REAL_CONFIG", "configs/base.yaml")  # default: all 26 layers, MobileMoE-M
+    return [REPO / p.strip() for p in spec.split(",") if p.strip()]
+
+
+def _layer_map(cfg) -> dict:
+    from transplant.models.layer_map import resolve_layer_map
+
+    return resolve_layer_map(cfg.pair, int(cfg.pair.a.num_layers), int(cfg.pair.b.num_layers))[1]
+
+
 @pytest.fixture(scope="module")
 def cfg():
-    return load_config([REPO / "configs" / "base.yaml"])  # all 26 layers, as in training
+    return load_config(_config_paths())  # the setup training uses
 
 
 @pytest.fixture(scope="module")
@@ -83,7 +100,9 @@ def test_2_b_extraction(cfg, device):
     policy = resolve_precision({"mode": "auto"}, device)
     model = load_model_b_full(cfg.pair.b, policy.b_dtype, device)
     tok = load_tokenizer(cfg.pair.b, "b")
-    blocks = extract_blocks(model, cfg.pair.b, [0, 13, 25])
+    n_b, n_exp = int(cfg.pair.b.num_layers), int(cfg.pair.b.num_experts)
+    mid = n_b // 2
+    blocks = extract_blocks(model, cfg.pair.b, [0, mid, n_b - 1])
     ins, outs, hooks = {}, {}, []
     for j, blk in blocks.items():
         hooks.append(blk.norm.register_forward_pre_hook(lambda m, i, j=j: ins.__setitem__(j, i[0].detach())))
@@ -97,13 +116,24 @@ def test_2_b_extraction(cfg, device):
     for h in hooks:
         h.remove()
     for j, blk in blocks.items():
-        assert len(blk.router_calls) == 1 and tuple(blk.router_calls[0].shape) == (ids.numel(), 60)
+        assert len(blk.router_calls) == 1 and tuple(blk.router_calls[0].shape) == (ids.numel(), n_exp)
         blk.record_routing = False
         with torch.no_grad():
             got = blk(ins[j])
         tol = 1e-2 if policy.b_dtype != torch.float32 else 1e-5
         assert got.shape == ins[j].shape  # MobileMoE returns (batch * seq, d); the block restores the shape
         torch.testing.assert_close(got.reshape(outs[j].shape).float(), outs[j].float(), rtol=tol, atol=tol)
+    # The bucketed forward (what runs on the M5) against MobileMoE's own forward, in fp32.
+    blocks[mid]._remove_hooks()  # the block's hooks are bound methods; copy the module without them
+    moe = copy.deepcopy(blocks[mid].moe).float()
+    blocks[mid]._install_hooks()
+    u = blocks[mid].norm(ins[mid]).float()
+    with torch.no_grad():
+        mine, mine_logits = moe(u)
+        theirs, their_logits = moe.native_forward(u)
+    assert hasattr(moe, "native_forward")  # the fast forward (bucketed or grouped) is in place
+    torch.testing.assert_close(mine_logits, their_logits)
+    torch.testing.assert_close(mine, theirs, rtol=1e-4, atol=1e-4)
 
 
 def test_3_switch_off_equals_gemma(cfg, device):
@@ -118,6 +148,24 @@ def test_3_switch_off_equals_gemma(cfg, device):
     with torch.no_grad(), surgery.mode(hybrid.model, "original"):
         got = hybrid.model(input_ids=ids).logits
     torch.testing.assert_close(got, want, rtol=0, atol=0)
+    # Ridge and routing agreement run right-padded batches without an attention mask
+    # (init/ridge.py). Nothing may turn NaN on this GPU, also with padding far beyond Gemma's
+    # 512-token sliding window, and what follows the text must not reach it: two inputs of the
+    # same length that differ only after position 100 give the same states before it.
+    short = ids[:1, :100]
+    padded = torch.full((1, 1024), hybrid.tokenizer.pad_token_id or 0, dtype=torch.long, device=device)
+    padded[:, :100] = short
+    other = padded.clone()
+    other[:, 100:] = torch.randint(10, 200_000, (1, 924), device=device)
+    with torch.no_grad(), surgery.mode(hybrid.model, "original"):
+        alone = hybrid.model.model(input_ids=short).last_hidden_state.float()
+        with_pad = hybrid.model.model(input_ids=padded).last_hidden_state.float()
+        with_other = hybrid.model.model(input_ids=other).last_hidden_state.float()
+    assert torch.isfinite(with_pad).all() and torch.isfinite(with_other).all()
+    torch.testing.assert_close(with_pad[:, :100], with_other[:, :100], rtol=1e-3, atol=1e-3)
+    # Against the unpadded text only bf16 rounding differs (other sequence length, other
+    # kernels): about 1.5% of the norm after 26 layers on the M5 (measured 7 Oct 2026).
+    assert float((with_pad[:, :100] - alone).norm() / alone.norm()) < 5e-2
 
 
 def test_4_gradient_isolation(cfg, device):
@@ -132,12 +180,16 @@ def test_4_gradient_isolation(cfg, device):
     (ce / n).backward()
     named = [n for n, p in model.named_parameters() if p.grad is not None]
     assert named and all(".w_in." in n or ".w_out." in n for n in named)
+    # Layers outside the layout keep Gemma's own FFN module, untouched (Stage 4: 6 of 26)
+    layer_map = _layer_map(cfg)
+    for i, layer in enumerate(surgery.decoder_layers(model)):
+        assert isinstance(layer.mlp, surgery.SLOT_TYPES) == (i in layer_map), i
 
 
 @pytest.mark.gpu
 @pytest.mark.skipif(not (torch.cuda.is_available() or torch.backends.mps.is_available()), reason="needs a GPU")
-def test_5_memory_all_26_layers(tmp_path):
-    """Real training steps with all 26 layers (local matching, then end to end with the teacher
+def test_5_memory(tmp_path):
+    """Real training steps with every transplanted layer (local matching, then end to end with the teacher
     pass, chunked CE + KL and backward, each with an AdamW step) peak below the limit: the GPU
     working set macOS recommends for this Mac (about two thirds of its memory), or
     TRANSPLANT_MEM_LIMIT_GB. Measured in a fresh process by `transplant memcheck`."""
@@ -146,9 +198,9 @@ def test_5_memory_all_26_layers(tmp_path):
     import sys
 
     out = tmp_path / "memcheck.json"
+    cfg_args = [a for p in _config_paths() for a in ("--config", str(p))]
     proc = subprocess.run(
-        [sys.executable, "-m", "transplant", "memcheck", "--config", str(REPO / "configs" / "base.yaml"),
-         "--json", str(out)],
+        [sys.executable, "-m", "transplant", "memcheck", *cfg_args, "--json", str(out)],
         cwd=REPO, capture_output=True, text=True, timeout=3600,
     )
     print(proc.stdout[-4000:])
@@ -156,7 +208,7 @@ def test_5_memory_all_26_layers(tmp_path):
     res = json.loads(out.read_text())
     print(f"peak {res['peak_gb']} GB (live tensors {res['peak_live_gb']} GB), weights {res['weights_gb']} GB, "
           f"limit {res['limit_gb']} GB; local {res['local']}, end to end {res['e2e']}")
-    assert res["transplanted_layers"] == 26
+    assert res["transplanted_layers"] == len(_layer_map(load_config(_config_paths())))
     assert res["peak_gb"] < res["limit_gb"]
 
 

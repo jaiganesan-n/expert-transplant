@@ -1,0 +1,25 @@
+# Stage 4 pair: Gemma 3 1B (Model A, 26 layers x 1152) receives MobileMoE-S-Base's MoE blocks
+# (Model B, 20 layers x 768) in 20 of its 26 layers, layout `spread`: MobileMoE-S layer j goes to
+# Gemma layer round(25 j / 19), at the same relative depth; Gemma layers 2, 6, 10, 15, 19 and 23
+# keep their own FFN (frozen, no projections). Compose after base.yaml (the stage4 stage configs
+# include this file).
+pair:
+  b:
+    model_id: facebook/MobileMoE-S-Base  # gated: accept on its own Hugging Face page (separate from M); FAIR NC
+    revision: null           # every run records the commit it used in run_info.json (model_b.revision);
+                             # pin it here after `transplant inspect` if you want it fixed
+    trust_remote_code: true
+    num_layers: 20
+    hidden_size: 768
+    num_experts: 60          # model card: 60 routed experts (FFN 384), top-4, 1 shared expert (FFN 1536)
+    top_k: 4
+    # Same family code as MobileMoE-M (module names found at M0); `transplant inspect` and gating
+    # test 2 check them on MobileMoE-S before any training [S4-A1].
+    layers_path: model.layers
+    moe_attr: feed_forward
+    norm_attr: post_attention_layernorm
+    router_attr: router
+    shared_attr: shared_expert
+    moe_forward: bucketed
+  layers: spread             # every MobileMoE-S layer once, at its relative depth in Gemma
+  layer_map: relative_depth

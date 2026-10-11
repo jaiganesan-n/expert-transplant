@@ -14,7 +14,7 @@ import torch
 from torch import nn
 
 from . import surgery
-from .layer_map import map_layers, parse_layers
+from .layer_map import resolve_layer_map
 from .moe_source import MoESourceBlock, extract_blocks, randomize_like
 from .projection import load_projection_matrix, make_projection
 from ..utils.device import PrecisionPolicy
@@ -87,7 +87,8 @@ def load_model_b_full(b_cfg: dict, dtype: torch.dtype, device: torch.device | st
     if is_tiny(b_cfg):
         from .tiny import tiny_model_b
 
-        model = tiny_model_b(seed=int(b_cfg.get("seed", 1)), pretrain_steps=int(b_cfg.get("pretrain_steps", 0)))
+        model = tiny_model_b(seed=int(b_cfg.get("seed", 1)), pretrain_steps=int(b_cfg.get("pretrain_steps", 0)),
+                             n_layers=int(b_cfg.get("num_layers") or 4))
     else:
         from transformers import AutoModelForCausalLM
 
@@ -99,6 +100,11 @@ def load_model_b_full(b_cfg: dict, dtype: torch.dtype, device: torch.device | st
         )
         if hasattr(model, "config"):
             model.config.use_cache = False
+    kind = b_cfg.get("moe_forward", "bucketed")
+    if kind != "native":
+        from .moe_source import use_fast_forward
+
+        use_fast_forward(model, b_cfg, kind)  # MobileMoE's own per-expert loop stalls the Apple GPU
     cast_keep_rope_fp32(model, dtype, device)
     model.requires_grad_(False)
     model.eval()
@@ -118,7 +124,7 @@ def b_architecture(b_cfg: dict) -> tuple[int, int]:
     if is_tiny(b_cfg):
         from .tiny import tiny_model_b
 
-        m = tiny_model_b()
+        m = tiny_model_b(n_layers=int(b_cfg.get("num_layers") or 4))
         return n_layers_of(m), hidden_of(m)
     return int(b_cfg["num_layers"]), int(b_cfg["hidden_size"])
 
@@ -181,8 +187,7 @@ def build_hybrid(
         model_a = load_model_a(pair["a"], policy.a_dtype, device, cfg.get("precision", {}).get("attn_implementation", "sdpa"))
     n_a, d_a = n_layers_of(model_a), hidden_of(model_a)
     n_b, d_b = b_architecture(pair["b"])
-    a_layers = parse_layers(pair["layers"], n_a)
-    layer_map = map_layers(a_layers, n_a, n_b, pair.get("layer_map", "relative_depth"))
+    a_layers, layer_map = resolve_layer_map(pair, n_a, n_b)
 
     if inner_kind == "a_ffn_bottleneck":
         blocks = {}

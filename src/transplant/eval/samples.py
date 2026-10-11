@@ -20,18 +20,34 @@ DEFAULT_PROMPTS = [
 ]
 
 
+SAMPLE_LENGTH = 128  # every greedy step runs on this many positions (see greedy)
+
+
 @torch.no_grad()
-def greedy(model, tok, prompt: str, max_new_tokens: int, device) -> str:
-    ids = tok(prompt, return_tensors="pt", add_special_tokens=True)["input_ids"].to(device)
+def greedy(model, tok, prompt: str, max_new_tokens: int, device, length: int = SAMPLE_LENGTH) -> str:
+    """Greedy decoding without a KV cache, on a fixed-length buffer.
+
+    The sequence sits at the start of a ``length``-long buffer padded on the right; the model
+    is causal, so the padding never affects the positions before it, and every step reads
+    the logits at the last real position. One shape for every step and prompt: on the Apple
+    GPU each new shape compiles new kernels that stay in memory.
+    """
+    ids = tok(prompt, return_tensors="pt", add_special_tokens=True)["input_ids"][0].tolist()
+    n_new = max(0, min(max_new_tokens, length - len(ids)))
+    pad = tok.pad_token_id if tok.pad_token_id is not None else (tok.eos_token_id or 0)
+    buf = torch.full((1, max(length, len(ids))), pad, dtype=torch.long, device=device)
+    buf[0, : len(ids)] = torch.tensor(ids, device=device)
     weight = model.lm_head.weight
     eos = tok.eos_token_id
-    for _ in range(max_new_tokens):
-        h = model.model(input_ids=ids, use_cache=False).last_hidden_state[:, -1]
-        nxt = (h.to(weight.dtype) @ weight.T).float().argmax(-1, keepdim=True)
-        ids = torch.cat([ids, nxt], dim=1)
-        if eos is not None and int(nxt) == eos:
+    cur = len(ids)
+    for _ in range(n_new):
+        h = model.model(input_ids=buf, use_cache=False).last_hidden_state[:, cur - 1]
+        nxt = int((h.to(weight.dtype) @ weight.T).float().argmax(-1))
+        buf[0, cur] = nxt
+        cur += 1
+        if eos is not None and nxt == eos:
             break
-    return tok.decode(ids[0], skip_special_tokens=True)
+    return tok.decode(buf[0, :cur].tolist(), skip_special_tokens=True)
 
 
 def write_samples(hybrid, cfg: dict, device, path: Path, label: str = "") -> list[dict]:

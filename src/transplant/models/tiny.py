@@ -177,10 +177,22 @@ class TinyGatedMLP(nn.Module):
         return self.down_proj(nn.functional.silu(self.gate_proj(x)) * self.up_proj(x))
 
 
-class TinySparseMoE(nn.Module):
-    """Sigmoid top-k routing, normalized over the chosen k, plus an always-on shared expert.
+class TinyExperts(nn.Module):
+    """MobileMoE's expert layout: one (E, d, 2F) gate-up tensor and one (E, F, d) down tensor."""
 
-    Shaped like MobileMoE's MobileMoETextMoe (read at M0): the router logits come from
+    def __init__(self, num_experts: int, d: int, hidden: int):
+        super().__init__()
+        self.gate_up_proj = nn.Parameter(torch.empty(num_experts, d, 2 * hidden).uniform_(-d**-0.5, d**-0.5))
+        self.down_proj = nn.Parameter(torch.empty(num_experts, hidden, d).uniform_(-hidden**-0.5, hidden**-0.5))
+        self.act_fn = nn.SiLU()
+
+
+class TinySparseMoE(nn.Module):
+    """A small copy of MobileMoE's MobileMoETextMoe (forward read at M0, 6 Oct 2026).
+
+    Sigmoid scores; top-k chosen on scores plus a per-expert selection bias; the chosen
+    unbiased scores normalized over the k and scaled; experts weighted after their output;
+    an always-on shared expert. Like the original, the router logits are computed with
     F.linear on the router's weight in fp32 (router.forward never runs), and the block
     returns (flattened (N, d) output, router logits); the decoder layer reshapes it back.
     """
@@ -188,23 +200,40 @@ class TinySparseMoE(nn.Module):
     def __init__(self, d: int, num_experts: int, top_k: int, expert_hidden: int, shared_hidden: int):
         super().__init__()
         self.top_k = top_k
-        self.gate = nn.Linear(d, num_experts, bias=False)
-        self.experts = nn.ModuleList([TinyGatedMLP(d, expert_hidden) for _ in range(num_experts)])
+        self.hidden_dim = d
+        self.num_experts = num_experts
+        self.routed_scaling_factor = 2.5
+        self.norm_topk_prob = True
+        self.experts = TinyExperts(num_experts, d, expert_hidden)
+        self.router = nn.Linear(d, num_experts, bias=False)
+        self.expert_bias = nn.Parameter(torch.zeros(num_experts), requires_grad=False)
         self.shared_expert = TinyGatedMLP(d, shared_hidden)
 
-    def forward(self, x):
-        flat = x.reshape(-1, x.shape[-1])
-        logits = nn.functional.linear(flat.float(), self.gate.weight.float())
-        scores = torch.sigmoid(logits)
-        top, idx = scores.topk(self.top_k, dim=-1)
-        weights = (top / top.sum(-1, keepdim=True)).to(flat.dtype)
-        out = torch.zeros_like(flat)
-        for e, expert in enumerate(self.experts):  # dropless dispatch
-            rows, slot = (idx == e).nonzero(as_tuple=True)
-            if rows.numel():
-                out.index_add_(0, rows, expert(flat[rows]) * weights[rows, slot, None])
-        out = out + self.shared_expert(flat)
-        return out, logits
+    def forward(self, hidden_states):  # MobileMoETextMoe.forward, line for line
+        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        router_logits = nn.functional.linear(hidden_states.float(), self.router.weight.float())
+        scores = torch.sigmoid(router_logits.float())
+        scores_for_topk = scores + self.expert_bias
+        _, topk_indices = torch.topk(scores_for_topk, self.top_k, dim=-1)
+        topk_scores = scores.gather(1, topk_indices)
+        if self.norm_topk_prob:
+            topk_scores = topk_scores / (topk_scores.sum(dim=-1, keepdim=True) + 1e-20)
+        topk_scores = topk_scores * self.routed_scaling_factor
+        out = torch.zeros_like(hidden_states)
+        for e in range(self.num_experts):
+            mask = (topk_indices == e).any(dim=-1)
+            if not mask.any():
+                continue
+            idx = mask.nonzero(as_tuple=True)[0]
+            x_sel = hidden_states[idx]
+            gate_up = x_sel @ self.experts.gate_up_proj[e]
+            gate, up = gate_up.chunk(2, dim=-1)
+            expert_out = (self.experts.act_fn(gate) * up) @ self.experts.down_proj[e]
+            pos = (topk_indices[idx] == e).nonzero(as_tuple=True)
+            weights = topk_scores[idx][pos[0], pos[1]]
+            out[idx] += expert_out * weights.unsqueeze(-1)
+        out = out + self.shared_expert(hidden_states)
+        return out, router_logits
 
 
 class TinyMoELayer(nn.Module):
@@ -256,12 +285,14 @@ TINY_B_CFG = {"num_experts": 6, "top_k": 2, "layers_path": "auto", "moe_attr": "
               "router_attr": "auto", "shared_attr": "auto"}
 
 
-def _tiny_model_b(seed: int = 1):
+def _tiny_model_b(seed: int = 1, n_layers: int = 4):
     torch.manual_seed(seed)
-    model = TinyMoEForCausalLM(len(tiny_tokenizer("b")))
+    model = TinyMoEForCausalLM(len(tiny_tokenizer("b")), n_layers=n_layers)
     model.eval()
     return model
 
 
-def tiny_model_b(seed: int = 1, pretrain_steps: int = 0):
-    return _cached("tiny_b", lambda: _tiny_model_b(seed), pretrain_steps, tiny_tokenizer("b"), seed)
+def tiny_model_b(seed: int = 1, pretrain_steps: int = 0, n_layers: int = 4):
+    """Tiny stand-in for MobileMoE; ``n_layers`` < 4 stands in for MobileMoE-S (fewer layers than A)."""
+    name = "tiny_b_mobilemoe_layout" if n_layers == 4 else f"tiny_b_mobilemoe_layout_{n_layers}l"
+    return _cached(name, lambda: _tiny_model_b(seed, n_layers), pretrain_steps, tiny_tokenizer("b"), seed)

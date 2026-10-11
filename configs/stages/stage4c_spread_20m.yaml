@@ -1,0 +1,16 @@
+# Stage 4c: layout spread, 20M tokens in total, matched to Stage 3: continues 4b's projections and
+# data stream for 15M more tokens (the tokens Stage 3 read), end to end.
+#   bash scripts/stage4_run.sh 4c        (applied on top of runs/stage4b_spread_5m/config.yaml)
+include:
+  - ../pairs/stage4_mobilemoe_s.yaml
+run:
+  name: stage4c_spread_20m
+  experiment: stage4_spread
+  extend_from: runs/stage4b_spread_5m
+  tokens: 15_000_000      # + 4b's 4,997,120 = 19.99M in total; 915 steps, as Stage 3
+eval:
+  every_steps: 100        # the checks of Stage 3, at the same token counts
+  subset_tokens: 100_000
+  final_tokens: 250_000
+checkpoint:
+  every_minutes: 10

@@ -1,0 +1,24 @@
+# Stage 2, short form: all 26 layers, 5M training tokens, all of them end to end.
+# Use on top of stage2_full.yaml:  bash scripts/stage2_full_run.sh --config configs/stages/stage2_5m.yaml
+#
+# What Stage 1 showed, and why each setting is safe for the objective (CE + KL to Gemma):
+# * Local matching left the per-layer loss where ridge put it (mean NMSE 0.313 -> 0.316 over
+#   30 steps); end to end did all the work. So every token goes to end-to-end training.
+# * Ridge init depends only on the layers and the calibration text, not on the token budget.
+#   Stage 1's (400 documents, 211,601 aligned positions for a 1,152-wide regression) is
+#   reused instead of spending about 2 hours on all 2,019 documents.
+# * Evaluation matches Stage 1 (100k-token subsets, 250k tokens per set at the end), so the
+#   numbers compare directly and Gemma's and the ablated baselines come from the cache.
+run:
+  name: stage2_5m
+  experiment: stage2_5m
+  tokens: 5_000_000     # 305 end-to-end steps of 16,384 tokens
+  local_share: 0.0
+local:
+  enabled: false
+transplant:
+  init_path: runs/stage1_test/init.pt
+eval:
+  every_steps: 50       # 6 subset evaluations: the curve that decides on more tokens
+  subset_tokens: 100_000
+  final_tokens: 250_000

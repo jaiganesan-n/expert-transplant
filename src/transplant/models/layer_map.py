@@ -77,3 +77,37 @@ def parse_layers(spec, n_layers: int) -> list[int]:
         if not 0 <= i < n_layers:
             raise ValueError(f"layer {i} out of range for {n_layers} layers")
     return sorted(set(layers))
+
+
+def spread_layers(n_a: int, n_b: int) -> dict[int, int]:
+    """Layout ``spread`` (Stage 4): every B layer once, at its relative depth in A.
+
+    B layer j goes to A layer round(j * (L_A - 1) / (L_B - 1)); the A layers no B layer reaches keep
+    their own FFN. Gemma 3 1B (26) with MobileMoE-S (20): A layers 0, 1, 3, 4, 5, 7, ..., 24, 25 get
+    B layers 0..19 and the FFNs of layers 2, 6, 10, 15, 19 and 23 stay. Returns {A layer: B layer}.
+    """
+    if n_b > n_a:
+        raise ValueError(f"spread needs L_B <= L_A (got L_B={n_b}, L_A={n_a})")
+    out = {relative_depth(j, n_b, n_a): j for j in range(n_b)}
+    if len(out) != n_b:
+        raise ValueError(f"spread: two B layers fall on the same A layer for L_A={n_a}, L_B={n_b}")
+    return dict(sorted(out.items()))
+
+
+def resolve_layer_map(pair: dict, n_a: int, n_b: int) -> tuple[list[int], dict[int, int]]:
+    """(transplanted A layers, {A layer: B layer}) from ``pair.layers`` and ``pair.layer_map``.
+
+    ``pair.layers: spread`` uses every B layer once at its relative depth (``spread_layers``);
+    anything else is a layer spec for ``parse_layers`` mapped with ``pair.layer_map``.
+    """
+    spec = pair.get("layers", "all")
+    if isinstance(spec, str) and spec.strip() == "spread":
+        lm = spread_layers(n_a, n_b)
+        return sorted(lm), lm
+    a_layers = parse_layers(spec, n_a)
+    return a_layers, map_layers(a_layers, n_a, n_b, pair.get("layer_map", "relative_depth"))
+
+
+def kept_layers(n_a: int, transplanted: list[int]) -> list[int]:
+    """The A layers that keep their own FFN."""
+    return [i for i in range(n_a) if i not in set(transplanted)]

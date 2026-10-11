@@ -54,7 +54,7 @@ $$
 m_t = S(\hat u_t) + \sum_{e \in \mathcal{T}_t} g_{t,e}\,E_e(\hat u_t)
 $$
 
-In MobileMoE's code (read at M0) each of the 60 experts runs on exactly the tokens routed to it, with no capacity limit, so routing is dropless; b is a fixed per-expert bias that shifts which experts are selected but not their weights, and the chosen four's weights sum to 2.5 (MobileMoE's routed scaling factor). The block computes its router logits itself in fp32 and returns its output flattened to (tokens, 1024); the wrapper restores the shape and reads the logits from the block's output for the routing diagnostics.
+In MobileMoE's code (read at M0) each of the 60 experts runs on exactly the tokens routed to it, with no capacity limit, so routing is dropless; b is a fixed per-expert bias that shifts which experts are selected but not their weights, and the chosen four's weights sum to 2.5 (MobileMoE's routed scaling factor). The block computes its router logits itself in fp32 and returns its output flattened to (tokens, 1024); the wrapper restores the shape and reads the logits from the block's output for the routing diagnostics. On the Apple GPU the repo runs the same arithmetic through `bucketed_moe_forward`: the token groups of the experts are padded to a few fixed sizes, so the GPU sees few tensor shapes and waits for the host once per layer instead of once per expert.
 
 The router is frozen, so W_in alone decides which 4 of the 60 experts each token reaches. If W_in squeezes many tokens into one region of MobileMoE's space, the same few experts fire for all of them; the routing-health metrics watch for this.
 

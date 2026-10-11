@@ -1,0 +1,22 @@
+# Stage 4b: layout spread, 5M tokens, matched to Stage 2 (same tokens in the same order, same recipe).
+#   bash scripts/stage4_run.sh 4b
+# Starts again from ridge init (as Stage 2 did), reusing 4a's ridge file when it exists.
+include:
+  - ../pairs/stage4_mobilemoe_s.yaml
+run:
+  name: stage4b_spread_5m
+  experiment: stage4_spread
+  tokens: 5_000_000       # 305 steps (4,997,120 tokens), as Stage 2
+  local_share: 0.0
+local:
+  enabled: false
+transplant:
+  init_path: runs/stage4_spread_init/init.pt
+ridge:
+  max_docs: 400
+eval:
+  every_steps: 50         # the checks of Stage 2, at the same token counts
+  subset_tokens: 100_000
+  final_tokens: 250_000
+checkpoint:
+  every_minutes: 10

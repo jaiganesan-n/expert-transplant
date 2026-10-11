@@ -105,7 +105,9 @@ def routing_agreement(hybrid, model_b_blocks: dict, model_b, tok_b, texts: list[
 
             handles.append(slot.w_in.register_forward_hook(hook))
         with surgery.mode(model, "transplant"), surgery.record_routing(model):
-            model.model(input_ids=ab.ids_a.to(device), attention_mask=ab.mask_a.to(device), use_cache=False)
+            # right padding and causal models: no attention mask needed (and on MPS a mask can
+            # turn padding rows beyond Gemma's sliding window into NaN; see init/ridge.py)
+            model.model(input_ids=ab.ids_a.to(device), use_cache=False)
             collector = RoutingCollector(model)
             collector()
         for h in handles:
@@ -116,7 +118,7 @@ def routing_agreement(hybrid, model_b_blocks: dict, model_b, tok_b, texts: list[
             blk.router_calls = []
         norms = {j: blk.norm for j, blk in model_b_blocks.items()}
         with capture_module_inputs(norms) as hb:
-            run_until(model_b, input_ids=ab.ids_b.to(device), attention_mask=ab.mask_b.to(device))
+            run_until(model_b, input_ids=ab.ids_b.to(device))
         b_sel = {}
         for j, blk in model_b_blocks.items():
             if blk.router_calls:

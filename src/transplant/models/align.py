@@ -52,32 +52,35 @@ class AlignedBatch:
         return sum(len(p) for p in self.pairs)
 
 
-def _encode(tok, texts, max_len):
+def _encode(tok, texts, max_len, fixed_length: bool = True):
     enc = tok(
         texts,
         add_special_tokens=True,
         return_offsets_mapping=True,
         truncation=True,
         max_length=max_len,
-        padding=True,
+        padding="max_length" if fixed_length else True,
         return_tensors="pt",
     )
     return enc
 
 
-def encode_aligned(tok_a, tok_b, texts: list[str], max_len: int, skip_first: bool = True) -> AlignedBatch:
+def encode_aligned(tok_a, tok_b, texts: list[str], max_len: int, skip_first: bool = True,
+                   fixed_length: bool = True) -> AlignedBatch:
     """Tokenize the same texts with both tokenizers and pair aligned positions.
 
     Padding is on the right; padded positions have empty offsets and are never paired.
     ``skip_first`` drops pairs at the first real token of either side, whose states
-    behave like attention sinks.
+    behave like attention sinks. ``fixed_length`` pads every batch to ``max_len``: on the
+    Apple GPU each new tensor shape compiles and caches new kernels, so a length that
+    changes from batch to batch makes memory grow without bound.
     """
     for tok in (tok_a, tok_b):
         if tok.pad_token is None:
             tok.pad_token = tok.eos_token
         tok.padding_side = "right"
-    ea = _encode(tok_a, texts, max_len)
-    eb = _encode(tok_b, texts, max_len)
+    ea = _encode(tok_a, texts, max_len, fixed_length)
+    eb = _encode(tok_b, texts, max_len, fixed_length)
     pairs = []
     for r in range(len(texts)):
         oa = ea["offset_mapping"][r].tolist()

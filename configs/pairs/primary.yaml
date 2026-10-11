@@ -22,5 +22,8 @@ pair:
     norm_attr: post_attention_layernorm  # B's RMSNorm in front of the MoE block (N_B)
     router_attr: router
     shared_attr: shared_expert
+    moe_forward: bucketed    # bucketed | grouped | native. MobileMoE's own per-expert loop gives the Apple GPU
+                             # a new tensor shape on every call; bucketed and grouped compute the same thing
+                             # with few shapes (grouped: one batched product for all experts; compare with memcheck)
   layers: all                # every Gemma layer (int, list, "middle:K", "first:K", "last:K" also accepted)
   layer_map: relative_depth  # relative_depth | offset:K | fixed:J (ablation AB4)

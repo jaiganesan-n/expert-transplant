@@ -104,7 +104,7 @@ def test_router_trainable_ablation(tiny_cfg, cpu, fp32_policy):
     tiny_cfg.transplant.router_trainable = True
     hybrid = build_hybrid(tiny_cfg, cpu, fp32_policy)
     names = {n for n, p in hybrid.model.named_parameters() if p.requires_grad}
-    assert any(".inner.moe.gate." in n for n in names)
+    assert any(".inner.moe.router." in n for n in names)
     assert not any("experts" in n for n in names)
 
 

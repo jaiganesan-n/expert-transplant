@@ -35,7 +35,7 @@ def test_router_trains_in_fp32_when_blocks_are_fp16(tiny_cfg, cpu):
     slot = surgery.first_slot(hybrid.model)
     router = slot.inner.router
     assert router.weight.dtype == torch.float32 and router.weight.requires_grad
-    assert slot.inner.moe.experts[0].gate_proj.weight.dtype == torch.float16
+    assert slot.inner.moe.experts.gate_up_proj.dtype == torch.float16
     out = slot.transplant(torch.randn(1, 12, hybrid.model.config.hidden_size))
     out.float().pow(2).mean().backward()
     assert router.weight.grad is not None and router.weight.grad.dtype == torch.float32

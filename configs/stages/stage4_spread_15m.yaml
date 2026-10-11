@@ -1,0 +1,26 @@
+# Stage 4, one run of 15M tokens: Gemma 3 1B + MobileMoE-S, layout spread (20 MoE layers, Gemma's FFN
+# kept in layers 2, 6, 10, 15, 19, 23), from ridge init straight to 15M tokens with one cosine schedule.
+#   bash scripts/stage4_run.sh 15m
+# Data as Stages 2-3: the MobileMoE pre-training mix from the start of the stream, in the same order,
+# each token once (the first 15M tokens Stages 2 and 3 read). Recipe as Stages 2-3: ridge init, no
+# local matching, end to end with CE + 1.0 KL to unmodified Gemma, AdamW, peak LR 3e-4, cosine with
+# 2% warmup, 16,384 tokens per step.
+include:
+  - ../pairs/stage4_mobilemoe_s.yaml
+run:
+  name: stage4_spread_15m
+  experiment: stage4_spread
+  tokens: 15_000_000      # 915 steps of 16,384 tokens (14,991,360)
+  local_share: 0.0
+local:
+  enabled: false
+transplant:
+  init_path: runs/stage4_spread_init/init.pt   # ridge for MobileMoE-S on the 20 spread layers (made on the first run)
+ridge:
+  max_docs: 400           # the calibration of Stage 1
+eval:
+  every_steps: 100        # 9 checks on 100k held-out tokens: the learning curve
+  subset_tokens: 100_000
+  final_tokens: 250_000   # as Stages 1-3
+checkpoint:
+  every_minutes: 10

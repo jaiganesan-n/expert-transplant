@@ -22,6 +22,12 @@ def test_smoke_cli(tmp_path):
     assert (run_dir / "projections.pt").exists() and (tmp_path / "runs.csv").exists()
     assert "Hybrid:" in (run_dir / "samples.md").read_text()
     assert summary["tokens_trained_total"] <= 16384  # never more than the budget
+    # Ask the trained hybrid questions, from the run folder alone.
+    assert main(["ask", "--run", str(run_dir), "--max-new-tokens", "3", "--ablated"]) == 0
+    asked = json.loads((run_dir / "qa.json").read_text())
+    assert set(asked["modes"]) == {"gemma", "hybrid", "ablated"} and len(asked["questions"]) == 30
+    assert "| Model | Correct | Fact log-prob |" in (run_dir / "qa.md").read_text()
+    assert main(["ask-compare", str(run_dir), "--out", str(tmp_path / "qa_compare.md")]) == 0
 
 
 def test_resume_continues_from_checkpoint(tiny_cfg):
@@ -70,3 +76,15 @@ def test_memory_check_runs_on_tiny_models(tiny_cfg, tmp_path):
     res = json.loads(out.read_text())
     assert res["transplanted_layers"] == 4
     assert res["local"]["tokens_per_s"] > 0 and res["e2e"]["tokens_per_s"] > 0
+
+
+def test_checks_before_a_resume_are_kept(tmp_path):
+    from transplant.train.end_to_end import _past_checks
+
+    rows = [{"time": 1, "stage": "e2e", "step": 0, "ce": 5.0},
+            {"time": 2, "stage": "eval_subset", "step": 50, "ppl_hybrid": 64.4},
+            {"time": 3, "stage": "eval_subset", "step": 100, "ppl_hybrid": 50.3},
+            {"time": 4, "stage": "eval_subset", "step": 150, "ppl_hybrid": 45.0}]
+    (tmp_path / "metrics.jsonl").write_text("\n".join(json.dumps(r) for r in rows) + "\n")
+    assert _past_checks(tmp_path, 137) == [{"step": 50, "ppl_hybrid": 64.4}, {"step": 100, "ppl_hybrid": 50.3}]
+    assert _past_checks(tmp_path, 0) == []

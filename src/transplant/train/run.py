@@ -22,6 +22,7 @@ from ..data.heldout import load_manifest, mixture_hash
 from ..eval.evaluate import evaluate
 from ..eval.samples import write_samples
 from ..init.ridge import load_init, ridge_init
+from ..models import surgery
 from ..models.load import build_hybrid
 from ..utils.device import pick_device, resolve_precision
 from ..utils.logging import RunLogger, append_runs_csv, git_commit
@@ -29,7 +30,9 @@ from ..utils.memory import count_params, empty_cache, peak_gb
 from ..utils.seed import seed_everything
 from .checkpoint import load_projections
 from .end_to_end import train_e2e
+from .interrupt import PAUSE_FILE, RunLock, StopGuard, StopRequested, TrainingPaused
 from .local_match import train_local
+from .optim import steps_for_tokens
 
 
 def run_dir_of(cfg: dict) -> Path:
@@ -54,6 +57,18 @@ def token_budget(cfg: dict) -> tuple[int, int, Optional[Path]]:
     return local, total - local, None
 
 
+def _b_revision(b_cfg: dict) -> Optional[str]:
+    """The configured revision of Model B, or the commit the Hub serves now (recorded for reproducibility)."""
+    if b_cfg.get("revision") or str(b_cfg.get("model_id", "")).startswith("tiny"):
+        return b_cfg.get("revision")
+    try:
+        from huggingface_hub import HfApi
+
+        return HfApi().model_info(b_cfg["model_id"]).sha
+    except Exception:
+        return None
+
+
 def _device_name(device) -> str:
     if device.type == "cuda":
         return torch.cuda.get_device_name(0)
@@ -73,20 +88,57 @@ def _init_matrices(cfg: dict, device, policy, run_dir: Path, log=print) -> Optio
         return None
     shared = tcfg.get("init_path")
     path = Path(shared) if shared else run_dir / "init.pt"
-    if path.exists():
-        log(f"[init] reusing {path}")
-        return load_init(path)
+    expected = _expected_init_shapes(cfg)
+    for cand in dict.fromkeys([path, run_dir / "init.pt"]):
+        if not cand.exists():
+            continue
+        init = load_init(cand)
+        if not all(torch.isfinite(m).all() for layer in init.values() for m in layer.values()):
+            log(f"[init] {cand} holds NaN or inf (an earlier, broken calibration); computing it again")
+            cand.unlink()
+            continue
+        shapes = {int(i): tuple(layer["w_in"].shape) for i, layer in init.items()}
+        if expected is not None and shapes != expected:
+            log(f"[init] {cand} was made for other layers or another Model B "
+                f"({len(shapes)} layers, W_in {next(iter(shapes.values()), None)}); not used")
+            continue
+        log(f"[init] reusing {cand}")
+        return init
+    if expected is not None and path.exists():  # the shared file belongs to another setup: keep it, use the run's own
+        path = run_dir / "init.pt"
     log(f"[init] ridge init -> {path}")
     return ridge_init(cfg, device, policy, out_path=path, log=log)
 
 
+def _expected_init_shapes(cfg: dict) -> Optional[dict]:
+    """{A layer: W_in shape (d_B, d_A)} this run's ridge init must have; None when unknown (tiny models)."""
+    from ..models.layer_map import resolve_layer_map
+    from ..models.load import b_architecture, is_tiny
+
+    pair = cfg["pair"]
+    if is_tiny(pair["a"]) or not pair["a"].get("num_layers") or not pair["a"].get("hidden_size"):
+        return None
+    n_a, d_a = int(pair["a"]["num_layers"]), int(pair["a"]["hidden_size"])
+    n_b, d_b = b_architecture(pair["b"])
+    a_layers, _ = resolve_layer_map(pair, n_a, n_b)
+    return {i: (d_b, d_a) for i in a_layers}
+
+
 def run_training(cfg: dict, resume: bool = False, stop_after: Optional[str] = None, log=print) -> Path:
-    device, policy = setup(cfg)
+    """Train and evaluate one run. Only one process at a time works on a run folder (``RunLock``).
+    A stop (Ctrl-C, SIGTERM, SIGHUP, a PAUSE file) raises ``TrainingPaused`` after saving; running
+    again with ``resume`` continues where it stopped, in training or in the final evaluation."""
     run_dir = run_dir_of(cfg)
     if resume and (run_dir / "eval.json").exists() and (run_dir / "projections.pt").exists():
         log(f"[run] {run_dir} already finished; skipping (delete eval.json to re-evaluate)")
         return run_dir
     run_dir.mkdir(parents=True, exist_ok=True)
+    with RunLock(run_dir):
+        return _run_training(cfg, run_dir, resume, stop_after, log)
+
+
+def _run_training(cfg: dict, run_dir: Path, resume: bool, stop_after: Optional[str], log=print) -> Path:
+    device, policy = setup(cfg)
     save_config(cfg, run_dir / "config.yaml")
     manifest = load_manifest(cfg["data"]["heldout_dir"])
     logger = RunLogger(run_dir, use_tensorboard=bool(cfg["log"].get("tensorboard", False)))
@@ -124,7 +176,12 @@ def run_training(cfg: dict, resume: bool = False, stop_after: Optional[str] = No
         load_projections(extend_from / "projections.pt", hybrid.model)
     info["trainable_params"] = count_params(hybrid.model, trainable_only=True)
     info["layer_map"] = hybrid.layer_map
-    log(f"[run] transplanted layers {hybrid.a_layers}; trainable params {info['trainable_params']:,}")
+    n_a = len(surgery.decoder_layers(hybrid.model))
+    info["kept_ffn_layers"] = [i for i in range(n_a) if i not in hybrid.layer_map]
+    info["model_b"] = {"model_id": cfg["pair"]["b"].get("model_id"), "revision": _b_revision(cfg["pair"]["b"])}
+    logger.write_json("run_info.json", info)
+    log(f"[run] transplanted layers {hybrid.a_layers}; trainable params {info['trainable_params']:,}"
+        + (f"; Gemma's own FFN kept in layers {info['kept_ffn_layers']}" if info["kept_ffn_layers"] else ""))
 
     summary: dict = {}
     e2e_done = (run_dir / "projections.pt").exists() and resume
@@ -134,6 +191,15 @@ def run_training(cfg: dict, resume: bool = False, stop_after: Optional[str] = No
         prev = run_dir / "summary.json"
         if prev.exists():
             summary.update({k: v for k, v in json.loads(prev.read_text()).items() if k != "final"})
+        if "tokens_trained_total" not in summary:  # stopped between the end of training and the summary
+            mb, accum = int(cfg["e2e"]["micro_batch"]), int(cfg["e2e"]["grad_accum"])
+            seq_len = int(cfg["data"]["seq_len"])
+            e2e_steps = steps_for_tokens(e2e_tokens, mb, accum, seq_len)
+            summary.setdefault("e2e_steps", e2e_steps)
+            summary.setdefault("e2e_tokens", e2e_steps * mb * accum * seq_len)
+            summary["tokens_trained_this_run"] = summary.get("local_tokens", 0) + summary["e2e_tokens"]
+            summary["tokens_trained_total"] = prev_tokens + summary["tokens_trained_this_run"]
+            logger.write_json("summary.json", summary)
     else:
         if local_tokens > 0:
             if local_done:
@@ -157,11 +223,22 @@ def run_training(cfg: dict, resume: bool = False, stop_after: Optional[str] = No
         logger.write_json("summary.json", summary)
 
     empty_cache(device)
-    final = evaluate(hybrid, cfg, device, max_tokens=cfg["eval"].get("final_tokens"), log=log)
+    # The final evaluation keeps each finished set in eval_partial.json, so a stop here costs at most one set.
+    proj = run_dir / "projections.pt"
+    key = f"{proj.stat().st_size}-{proj.stat().st_mtime_ns}" if proj.exists() else None
+    partial = run_dir / "eval_partial.json"
+    guard = StopGuard(run_dir / PAUSE_FILE)
+    try:
+        with guard:
+            final = evaluate(hybrid, cfg, device, max_tokens=cfg["eval"].get("final_tokens"), log=log,
+                             partial_path=partial, partial_key=key, guard=guard)
+            write_samples(hybrid, cfg, device, run_dir / "samples.md", label=f"({info['run_name']})")
+    except StopRequested as e:
+        guard.clear_pause_file()
+        log("[run] stopped during the final evaluation; finished sets are kept. Run the same command to finish it.")
+        raise TrainingPaused(-1, -1, e.reason, phase="final evaluation") from None
     summary["final"] = final
     summary["peak_gb"] = max(summary.get("peak_gb", 0) or 0, peak_gb(device) or 0)
-    logger.write_json("eval.json", final)
-    write_samples(hybrid, cfg, device, run_dir / "samples.md", label=f"({info['run_name']})")
     logger.write_json("summary.json", summary)
     info["finished"] = time.strftime("%Y-%m-%d %H:%M:%S")
     logger.write_json("run_info.json", info)
@@ -176,6 +253,11 @@ def run_training(cfg: dict, resume: bool = False, stop_after: Optional[str] = No
             "min_routing_entropy": final.get("min_routing_entropy"), "peak_gb": summary["peak_gb"],
             "tokens_per_s": summary.get("e2e_tokens_per_s"), "notes": cfg["run"].get("notes", ""),
         })
+    logger.write_json("eval.json", final)  # written last: it marks the run as finished
+    try:
+        partial.unlink()
+    except FileNotFoundError:
+        pass
     logger.close()
     log(f"[run] done: {run_dir} (samples in {run_dir / 'samples.md'})")
     return run_dir
