@@ -1,9 +1,36 @@
-# Expert Transplant (Project J'AI)
+<h1 align="center">Project J'AI</h1>
+<h3 align="center">Expert Transplant: replacing the FFNs of one language model with the frozen MoE experts of another</h3>
+
+<p align="center">
+  <a href="https://medium.com/@jaiganesan"><img alt="Medium: @jaiganesan" src="https://img.shields.io/badge/Medium-@jaiganesan-000000?style=for-the-badge&logo=medium&logoColor=white"></a>
+  <a href="https://www.linkedin.com/in/jaiganesan-n/"><img alt="LinkedIn: jaiganesan-n" src="https://img.shields.io/badge/LinkedIn-jaiganesan--n-0A66C2?style=for-the-badge&logo=linkedin&logoColor=white"></a>
+</p>
+<p align="center">
+  <img alt="Code license: Apache 2.0" src="https://img.shields.io/badge/code-Apache%202.0-blue?style=flat-square">
+  <img alt="Python 3.12" src="https://img.shields.io/badge/Python-3.12-3776AB?style=flat-square&logo=python&logoColor=white">
+  <img alt="PyTorch 2.8" src="https://img.shields.io/badge/PyTorch-2.8-EE4C2C?style=flat-square&logo=pytorch&logoColor=white">
+  <img alt="Transformers 4.57" src="https://img.shields.io/badge/Transformers-4.57-FFD21E?style=flat-square&logo=huggingface&logoColor=black">
+  <img alt="Runs on a MacBook Air M5 (MPS)" src="https://img.shields.io/badge/runs%20on-MacBook%20Air%20M5%20(MPS)-555555?style=flat-square&logo=apple&logoColor=white">
+</p>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/figures/banner_dark.png">
+    <img alt="Gemma 3 1B with MobileMoE's MoE blocks in its FFN slots, each between two trained projections W_in and W_out" src="docs/figures/banner_light.png" width="100%">
+  </picture>
+</p>
+
+| **20 of 26** | **35.4M** | **0.82 nats** | **10 / 30** |
+| :---: | :---: | :---: | :---: |
+| Gemma FFNs replaced by MobileMoE-S experts | trained parameters; both models stay frozen | CE gap to Gemma, from 13.09 with the FFNs deleted | basic questions answered right (Gemma: 28) |
+
+<sub>Stage 4, the best result: MobileMoE-S in 20 of Gemma's 26 layers, 15M training tokens on one MacBook Air. Stages 1 to 3 replace all 26 FFNs with MobileMoE-M.</sub>
 
 Training, testing and evaluation code for one question: **can a frozen Mixture-of-Experts layer from one pretrained language model replace the feed-forward network (FFN) of another, independently trained model, if only two small projection matrices per layer are trained?**
 
 Gemma 3 1B (dense) is the host. In Stages 1 to 3 the donor is MobileMoE-M-Base and all 26 of Gemma's FFNs are replaced by its MoE blocks, each between two trainable projections. Stage 4 changes the architecture: MobileMoE-S-Base's 20 MoE blocks replace 20 of Gemma's FFNs at the same relative depth, and Gemma keeps its own FFN in the other 6 layers. Both models always stay frozen. Everything trains and runs on a MacBook Air M5 (16 GB, PyTorch MPS, bf16), with packages installed by [uv](https://docs.astral.sh/uv/).
 
+> [!NOTE]
 > **Objective.** Project J'AI started from a plain question: if I remove the FFNs of one model and put the MoE layers of a different model in their place, will the result still work as a language model? I just wanted to know whether it works or not. It looks like it does. The trained projection matrices in each slot (W_in and W_out, the transformation layer between the two hidden sizes) learn to translate between the two models, so that one model's embeddings and attention can communicate with another model's MoE experts.
 
 | Contents | |
@@ -574,7 +601,7 @@ expert-transplant/
 │                 stage3_speed.py, stage4_test.sh, stage4_run.sh, stage4_validate.sh, stage4_compare.py,
 │                 ask_stages.sh, progress.py, env.sh
 ├── tests/
-├── docs/         architecture.md, usage.md, stage4.md, figures/ (4 architecture figures, 13 equation cards,
+├── docs/         architecture.md, usage.md, stage4.md, figures/ (banner, 4 architecture figures, 13 equation cards,
 │                 stage4/ architecture and equations, results/ charts of Stages 1-4)
 ├── notes/        local run logs (git-ignored)
 └── results/      runs.csv, qa_compare.md, stage4_compare.md
@@ -582,8 +609,13 @@ expert-transplant/
 
 ## Licenses
 
-Code: Apache 2.0 (`LICENSE`). Models and datasets keep their own terms; `THIRD_PARTY_LICENSES.md` summarizes those of Stages 1-3: MobileMoE-M-Base is non-commercial research only, Gemma has its own terms, and Natural Reasoning is CC-BY-NC-4.0. MobileMoE-S-Base, used in Stage 4 and not listed there, is gated separately under the same FAIR Noncommercial Research License. Trained projections are derived from Gemma and the MobileMoE model they were trained with; share them only as those licenses allow. The charts in `docs/figures/results/` are drawn from the run files of Stages 1 to 4; `docs/figures/stage4/` comes from `docs/figures/src/make_stage4_figures.py`.
+Code: Apache 2.0 (`LICENSE`). Models and datasets keep their own terms; `THIRD_PARTY_LICENSES.md` summarizes those of Stages 1-3: MobileMoE-M-Base is non-commercial research only, Gemma has its own terms, and Natural Reasoning is CC-BY-NC-4.0. MobileMoE-S-Base, used in Stage 4 and not listed there, is gated separately under the same FAIR Noncommercial Research License. Trained projections are derived from Gemma and the MobileMoE model they were trained with; share them only as those licenses allow. The charts in `docs/figures/results/` are drawn from the run files of Stages 1 to 4; `docs/figures/stage4/` comes from `docs/figures/src/make_stage4_figures.py`, and the banner from `docs/figures/src/make_banner.py`.
 
 ---
 
+## Author
+
+**Jai Ganesan** · [Medium](https://medium.com/@jaiganesan) · [LinkedIn](https://www.linkedin.com/in/jaiganesan-n/)
+
+> [!IMPORTANT]
 > **Note.** Due to hardware constraints (one MacBook Air with 16 GB of memory), I have stopped this experiment at this stage for now. If you try it, with this pair of models or another, let me know your results.
