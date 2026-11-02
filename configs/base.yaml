@@ -25,6 +25,10 @@ transplant:
   init_path: null       # reuse an existing ridge init file (it depends only on layers and calibration data)
   shared_expert: true   # false = routed experts only
   router_trainable: false   # true = MobileMoE's routers train too (in fp32)
+  random_moe:           # control C5 only (inner: random_moe_b); Stage 5 sets full: true
+    seed: null          # the random draw; null = run.seed (which also picks the documents the stream skips)
+    full: false         # true: no pretrained value left in the block (gate and up halves matched apart,
+                        # selection bias 0, norm gain = its own RMS); false: matrices only, as C5 was written
 
 ridge:
   batch_size: 4
@@ -32,6 +36,7 @@ ridge:
   lambdas: [1.0e-6, 1.0e-5, 1.0e-4, 1.0e-3, 1.0e-2, 1.0e-1, 1.0]   # relative to mean eigenvalue of X^T X
   target: rms_normalized    # B's MoE input, RMS-normalized per token (raw: "pre_norm")
   max_docs: null        # null = all calibration documents (about 2M tokens)
+  w_in_from: null       # another ridge init file: take its W_in as it is and fit only W_out (Stage 5: Stage 4's)
 
 local:                  # local matching: each layer imitates Gemma's FFN, one Gemma pass for all layers
   enabled: true

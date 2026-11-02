@@ -41,6 +41,7 @@ Gemma 3 1B (dense) is the host. In Stages 1 to 3 the donor is MobileMoE-M-Base a
 | [4. Stage 2: experiment and results](#4-stage-2-experiment-and-results) | 5M tokens end to end: held-out curve, routing, questions and answers |
 | [5. Stage 3: experiment and results](#5-stage-3-experiment-and-results) | 15M more tokens on Stage 2, to 20M: the learning-rate restart, the power law, questions and answers |
 | [6. Stage 4: a different architecture](#6-stage-4-a-different-architecture-partial-transplant-with-mobilemoe-s) | MobileMoE-S in 20 of 26 layers, 6 Gemma FFNs kept: architecture and equations, matched-token results |
+| [7. Stage 5: the random-expert control](#7-stage-5-the-random-expert-control) | Stage 4 again with random, frozen experts of the same architecture: did the pretrained experts contribute? |
 | [Run it](#run-it) | Setup, commands, repository layout; the full guide is [docs/usage.md](docs/usage.md) |
 
 ---
@@ -53,12 +54,13 @@ The transformation is a pair of linear maps per layer: **W_in** maps Gemma's hid
 
 ### Hypotheses
 
-The project tests two hypotheses:
+The project tests three hypotheses:
 
 | ID | Hypothesis | Measured by | Null result |
 | --- | --- | --- | --- |
 | H1 | With all 26 of Gemma's FFNs replaced by MobileMoE's MoE blocks, the hybrid recovers most of what Gemma loses when its FFNs are deleted | `GR_CE` on the held-out mix, with the CE gap to Gemma, the perplexity ratio and next-token accuracy beside it | `GR_CE` near 0: no better than Gemma with its FFNs deleted |
 | H2 | Inside the hybrid, routing stays diverse and agrees with MobileMoE's own routing above chance, on positions where both tokenizers align | Routing health on every evaluation; agreement with `eval --routing-agreement` | Router collapse (normalized entropy below 0.7), or chance-level agreement (0.039) |
+| H3 | The donor's pretrained experts contribute: the same hybrid with random, frozen experts of the same architecture does worse | CE gap on the held-out mix, random minus pretrained (Stage 5), with the Q/A test beside it | A difference within ±0.10 nats |
 
 ### The models
 
@@ -72,19 +74,19 @@ In Stages 1 to 3 both models have 26 layers, so Gemma layer i borrows MobileMoE-
 
 ### Results
 
-| Validation mix, 250k held-out tokens | Gemma 3 1B | All 26 FFNs deleted | Stage 1 (1M, all 26, M) | Stage 2 (5M, all 26, M) | Stage 3 (20M, all 26, M) | Stage 4 (15M, 20 of 26, S) |
-| --- | --- | --- | --- | --- | --- | --- |
-| Trainable parameters | – | – | 61.3M | 61.3M | 61.3M | **35.4M** |
-| Perplexity | 10.25 | 4,957,444 | 71.28 (6.95 ×) | 33.96 (3.31 ×) | 23.50 (2.29 ×) | **23.17 (2.26 ×)** |
-| CE gap to Gemma (nats), mix / WikiText-103 / C4 | 0 | 13.09 / 13.08 / 12.31 | 1.94 / 2.50 / 2.08 | 1.20 / 1.79 / 1.49 | 0.83 / 1.41 / 1.15 | **0.82 / 1.34 / 1.10** |
-| `GR_CE` (all-26-deleted floor) | 1 | 0 | 0.852 | 0.909 | 0.937 | **0.938** |
-| Next-token accuracy | 52.6% | 0.1% | 31.0% | 38.5% | 42.5% | **42.5%** |
-| Lowest routing entropy (alarm 0.7) | – | – | 0.856 | 0.829 | 0.806 | 0.724 |
-| Fact recovery on 30 basic questions | 100% | 0% | 65% | 80% | 89% | **89%** |
-| Questions answered correctly | 28 / 30 | 0 / 30 | 1 / 30 | 1 / 30 | 6 / 30 | **10 / 30** |
-| Training speed on the M5 | – | – | 119 tok/s | 131 tok/s | 165-175 tok/s | **326 tok/s** |
+| Validation mix, 250k held-out tokens | Gemma 3 1B | All 26 FFNs deleted | Stage 1 (1M, all 26, M) | Stage 2 (5M, all 26, M) | Stage 3 (20M, all 26, M) | Stage 4 (15M, 20 of 26, S) | Stage 5 control (Stage 4, random experts) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Trainable parameters | – | – | 61.3M | 61.3M | 61.3M | **35.4M** | 35.4M |
+| Perplexity | 10.25 | 4,957,444 | 71.28 (6.95 ×) | 33.96 (3.31 ×) | 23.50 (2.29 ×) | **23.17 (2.26 ×)** | 31.10 (3.03 ×) |
+| CE gap to Gemma (nats), mix / WikiText-103 / C4 | 0 | 13.09 / 13.08 / 12.31 | 1.94 / 2.50 / 2.08 | 1.20 / 1.79 / 1.49 | 0.83 / 1.41 / 1.15 | **0.82 / 1.34 / 1.10** | 1.11 / 1.66 / 1.40 |
+| `GR_CE` (all-26-deleted floor) | 1 | 0 | 0.852 | 0.909 | 0.937 | **0.938** | 0.915 |
+| Next-token accuracy | 52.6% | 0.1% | 31.0% | 38.5% | 42.5% | **42.5%** | 39.6% |
+| Lowest routing entropy (alarm 0.7) | – | – | 0.856 | 0.829 | 0.806 | 0.724 | 0.596 |
+| Fact recovery on 30 basic questions | 100% | 0% | 65% | 80% | 89% | **89%** | 81% |
+| Questions answered correctly | 28 / 30 | 0 / 30 | 1 / 30 | 1 / 30 | 6 / 30 | **10 / 30** | 3 / 30 |
+| Training speed on the M5 | – | – | 119 tok/s | 131 tok/s | 165-175 tok/s | **326 tok/s** | 188 tok/s (Low Power Mode) |
 
-M = MobileMoE-M-Base, S = MobileMoE-S-Base. In short: the transplant works as a language model, and it keeps improving with tokens, slowly (each doubling removes about 17% of the CE gap on the training mix, 12% on unlike text). Stage 4's partial transplant matches Stage 3 with 25% fewer tokens, 42% fewer trained parameters and a much weaker donor, and recalls facts as well: a sign that the recovered quality may not come mainly from the donor's own knowledge. No random-expert control was run, so this is not settled.
+M = MobileMoE-M-Base, S = MobileMoE-S-Base. In short: the transplant works as a language model, and it keeps improving with tokens, slowly (each doubling removes about 17% of the CE gap on the training mix, 12% on unlike text). Stage 4's partial transplant matches Stage 3 with 25% fewer tokens, 42% fewer trained parameters and a much weaker donor, and recalls facts as well. Stage 5 repeats Stage 4 with random experts of the same architecture: the hybrid is 0.29 nats worse on the mix (1.34 × the perplexity) and on unlike text, and the right fact is less likely for 29 of 30 questions, so **the donor's pretrained experts do contribute**. Random experts with the same trained projections still get the deleted-FFN Gemma most of the way back (`GR_CE` 0.915 against 0.938), so most of the repair comes from Gemma's untouched parts and the trained projections around a frozen block; the pretrained experts cut what is left by about a quarter (1.11 → 0.82 nats).
 
 ---
 
@@ -311,7 +313,7 @@ From Stage 1 to Stage 2 the right fact became more likely for 29 of 30 questions
 - **H1, as a language model: yes.** 91% of the CE gap between "FFNs deleted" and Gemma is recovered on the mix, the perplexity ratio roughly halved on all three sets, and perplexity, CE gap and accuracy improved with tokens on every set. The CE gap (1.20 nats, 3.31 × Gemma's perplexity) is still large.
 - **H2, routing health: yes.** No layer near collapse; dead experts halved and mean entropy rose, though the weakest layer (layer 1, 0.829) is lower than Stage 1's weakest. Agreement with MobileMoE's own routing was not measured.
 - **Fluency transfers much faster than knowledge.** Gemma's untouched attention handles format, copying and the type of the answer; the lookup from subject to fact, which a dense model keeps mostly in its FFNs, has not come back.
-- **Not answered:** how much of the recovery comes from MobileMoE's pretrained experts rather than from 61M trainable parameters around any MoE; no random-expert control was run.
+- **Not answered:** how much of the recovery comes from MobileMoE's pretrained experts rather than from 61M trainable parameters around any MoE; no random-expert control was run (Stage 5 runs one for Stage 4's setup: [Section 7](#7-stage-5-the-random-expert-control)).
 
 ---
 
@@ -403,7 +405,7 @@ Right: Paris, Tokyo, Portuguese, Jupiter, gravity, blue. The fact became more li
 - **More tokens keep helping, slowly.** CE gap 0.83 nats on the mix (2.29 × Gemma's perplexity), 94% of the damage of deleting all FFNs repaired, accuracy at 81% of Gemma's, fact recovery 89%.
 - **Unlike text recovers more slowly** ($\alpha = 0.18$ against 0.27), and facts faster ($\alpha = 0.41$).
 - **Gemma-like quality is hundreds of millions of tokens away** on this recipe, weeks of laptop time.
-- **Not answered:** whether MobileMoE's pretrained experts carry this, or any MoE with 61M trained projection parameters around it would do as well.
+- **Not answered:** whether MobileMoE's pretrained experts carry this, or any MoE with 61M trained projection parameters around it would do as well (answered for Stage 4's setup in [Section 7](#7-stage-5-the-random-expert-control)).
 
 ---
 
@@ -549,9 +551,96 @@ Mean normalized entropy 0.954 over the 20 MoE layers; 29 of 1,200 experts dead (
 ### What Stage 4 showed
 
 - **The partial transplant works at least as well as replacing all 26 FFNs**, per token and per parameter, and trains 1.8 × faster on the Mac. Keeping 6 of Gemma's FFNs spread over the depth helps most on unlike text.
-- **A much weaker donor gives the same text quality and the same factual recall.** That fits the reading that the recovered quality and facts do not come mainly from the transplanted experts' own knowledge (Gemma's attention, its 6 kept FFNs and the trained projections carrying most of it), but the 6 kept FFNs could also be making up for the weaker donor, and fact recall rests on 30 questions.
+- **A much weaker donor gives the same text quality and the same factual recall.** That fits the reading that the recovered quality and facts do not come mainly from the transplanted experts' own knowledge (Gemma's attention, its 6 kept FFNs and the trained projections carrying most of it), but the 6 kept FFNs could also be making up for the weaker donor, and fact recall rests on 30 questions. Stage 5 tested this reading and it does not hold as stated: with random experts in the same slots the hybrid is 0.29 nats worse and recalls fewer facts ([Section 7](#7-stage-5-the-random-expert-control)).
 - **Confound:** Stage 4 changes the layout, the donor and the number of trained parameters at once. No control that separates them was run.
 - **Early-layer routing is the weak spot**, with both donors.
+
+---
+
+## 7. Stage 5: the random-expert control
+
+**Question:** did MobileMoE-S's pretrained experts contribute to Stage 4's result, or would any frozen block of the same shape, with the same trained projections around it, do as well? Stages 2 to 4 left this open. Stage 5 repeats Stage 4 exactly (layout `spread`, the same 35.4M trained W_in / W_out, the same 15M tokens in the same order, the same recipe, micro-batch and evaluation) with one change: **the 20 MoE blocks keep MobileMoE-S's architecture, but every weight in them is random, and frozen**. Full design and commands: [docs/stage5.md](docs/stage5.md); report: [results/stage5_compare.md](results/stage5_compare.md).
+
+$$
+\text{contribution of the pretrained experts} = \Delta_{\mathrm{random}} - \Delta_{\mathrm{pretrained}}, \qquad \Delta = \mathrm{CE}_{\mathrm{hybrid}} - \mathrm{CE}_{A}
+$$
+
+| Part of each MoE block | Stage 4 | Stage 5 |
+| --- | --- | --- |
+| 60 routed experts (SwiGLU 768 → 384 → 768), shared expert (768 → 1536 → 768), router (60 × 768) | MobileMoE-S's | each matrix i.i.d. $\mathcal N(\mu, \sigma)$ with the pretrained matrix's own mean and std (gate and up halves apart) |
+| Selection bias $b$ | MobileMoE-S's | 0 |
+| Norm gain of $N_S$ | MobileMoE-S's | one constant: the RMS of the pretrained gain |
+| Routing rule (sigmoid, top-4, normalized and scaled by 2.5, shared expert always on) | MobileMoE-S's | same |
+| W_in at the start | ridge fit | **Stage 4's, bit for bit** |
+| W_out at the start | ridge fit through the pretrained block | the same ridge fit, through the random block |
+
+Only the scale of each tensor comes from MobileMoE-S, so the random experts run in the same numerical regime (the pretrained router's std is 0.07-0.11, five times a default init) without anything it learned. The draw is seeded and computed on the CPU, so training, evaluation and the Q/A test rebuild the same blocks bit for bit; `scripts/verify_stage5_random.py` checks that on the real models (architecture, no tensor equal or correlated to the pretrained one, scale, frozen, fingerprint).
+
+The verdict rule was set before the run, on the final CE gap of the validation mix with Stage 4's margin:
+
+| Random minus pretrained | Reading |
+| --- | --- |
+| ≥ +0.10 nats | the pretrained experts contributed |
+| −0.10 to +0.10 nats | no clear contribution: Gemma and the trained projections carry the recovery |
+| ≤ −0.10 nats | random experts did better |
+
+**Result: +0.29 nats. The pretrained experts contributed.** The run took about 22 hours on the M5 for 15M tokens; macOS Low Power Mode was on, hence 188 tok/s against Stage 4's 326 (the speed is not a property of the random blocks).
+
+### 7.1 Results
+
+| Final evaluation, 250k tokens per set | Gemma 3 1B | Stage 4, pretrained experts | Stage 5, random experts | Random minus pretrained |
+| --- | --- | --- | --- | --- |
+| Perplexity, mix (× Gemma) | 10.25 | 23.17 (2.26 ×) | 31.10 (3.03 ×) | × 1.34 |
+| CE gap, mix (nats) | 0 | 0.815 | 1.110 | **+0.294** |
+| CE gap, WikiText-103 | 0 | 1.338 | 1.665 | **+0.326** |
+| CE gap, C4 | 0 | 1.103 | 1.404 | **+0.301** |
+| Next-token accuracy, mix | 52.6% | 42.5% | 39.6% | −2.9 points |
+| `GR_CE`, mix (all 26 deleted = 0) | 1 | 0.938 | 0.915 | −0.023 |
+| Q/A: correct | 28 / 30 | 10 / 30 | 3 / 30 | −7 |
+| Q/A: fact log-prob (fact recovery) | −0.23 (100%) | −1.82 (89%) | −2.93 (81%) | −1.11 |
+
+The right fact is more likely with the pretrained experts for 29 of 30 questions (sign test p = 6 × 10⁻⁸). Seven are answered only with them (Paris, Portuguese, the heart, gravity, 12 months, Shakespeare, 1945), none only with random experts. By topic, the pretrained experts raise the fact log-probability per token by 1.6 nats in geography, 1.2 in science and history, 1.1 in everyday questions, and 0.1 in arithmetic, which neither run can do. Full report: [results/stage5_compare.md](results/stage5_compare.md).
+
+### 7.2 The learning curves: the same tokens, in the same order, with the same schedule
+
+| Tokens | Pretrained, CE gap | Random, CE gap | Random minus pretrained | Lowest routing entropy, pretrained / random |
+| --- | --- | --- | --- | --- |
+| 1.64M | 1.386 | 1.830 | +0.444 | 0.846 / 0.643 |
+| 3.28M | 1.194 | 1.512 | +0.318 | 0.811 / 0.609 |
+| 4.92M | 1.067 | 1.365 | +0.298 | 0.789 / 0.606 |
+| 6.55M | 0.997 | 1.284 | +0.287 | 0.760 / 0.612 |
+| 8.19M | 0.951 | 1.232 | +0.281 | 0.753 / 0.602 |
+| 9.83M | 0.896 | 1.185 | +0.289 | 0.737 / 0.600 |
+| 11.47M | 0.874 | 1.161 | +0.287 | 0.727 / 0.601 |
+| 13.11M | 0.859 | 1.144 | +0.285 | 0.721 / 0.598 |
+| 14.75M | 0.851 | 1.136 | +0.285 | 0.714 / 0.595 |
+
+Checks on 100k held-out tokens, at the same steps of both runs. In the first 5M tokens the trained projections make up part of the difference (+0.44 → +0.30); in the last 10M they make up none of it, and it stays at +0.28 to +0.29 while both gaps keep falling. In tokens, the random-expert hybrid at 14.75M is where the pretrained one was at about 4M (3.7 ×; read off checks that sit at different points of the learning-rate schedule, so rough).
+
+### 7.3 Routing
+
+| Final evaluation, 20 MoE layers | Stage 4, pretrained experts | Stage 5, random experts |
+| --- | --- | --- |
+| Mean normalized entropy | 0.954 | 0.698 |
+| Lowest (Gemma layer) | 0.724 (0) | 0.596 (11) |
+| Dead experts (of 1,200) | 29, 26 of them in Gemma layers 0, 1 and 3 | 344, between 7 and 26 in every layer |
+| Busiest expert's share (layer) | 18.3% (0) | 24.8% (11) |
+
+With random experts routing is narrow from the first check (lowest entropy 0.64 at 1.6M tokens) and stays there, below the 0.7 alarm in most layers: a property of the random blocks, not a collapse during training. The one layer where random experts route more evenly is Gemma layer 0 (0.80 against 0.72), where the pretrained experts concentrate most. That is a hint, not a test, that the early-layer concentration of Stages 1-4 comes from what the pretrained routers learned (token identity on the Llama 3 tokenizer), as Section 6.9 guessed.
+
+### What Stage 5 showed
+
+- **H3: yes, the pretrained experts contributed.** +0.29 nats on the mix, three times the margin set before the run, with everything else identical and both arms checked on the real models: 13 of 13 checks on the random blocks (`scripts/verify_stage5_random.py`), 10 of 10 on Stage 4's (`scripts/verify_stage4_inference.py`: MobileMoE-S's checkpoint bit for bit, nothing initialised at random). The difference is as large on WikiText-103 and C4 (+0.33, +0.30), so it is not a by-product of training on MobileMoE's own pre-training mix.
+- **Facts depend on the experts most.** With random experts the fact log-probability falls by 1.1 nats per token, against 0.29 nats per token on running text; the loss is in world knowledge (geography, science, history, everyday facts), not in arithmetic. A frozen pretrained block gives the trained projections far more to work with for facts than a random block of the same shape.
+- **Most of the repair does not need pretrained experts.** Random blocks with trained projections bring the CE gap from 13.09 (all 26 deleted) or 18.31 (the layout floor) down to 1.11: `GR_CE` 0.915, fact recovery 81%. What turns a Gemma without FFNs back into a language model is mostly Gemma's own frozen parts (attention, embeddings, the 6 kept FFNs, the head) and 35.4M trained parameters that put a well-formed vector back into every FFN slot, through a frozen nonlinear block. The pretrained experts then cut the remaining gap by 27% on the mix (1.110 → 0.815) and by 20-22% on unlike text.
+- **Stage 4's reading needs correcting.** Stage 4 matched Stage 3 with a much weaker donor, which looked as if the experts did not matter much. With random experts the same layout is at 1.14 after 14.75M tokens, behind all 26 layers with MobileMoE-M's pretrained experts at the same tokens (0.92). MobileMoE-S's experts are part of why Stage 4 matches Stage 3.
+- **A per-layer linear check cannot see the difference.** Before training, ridge W_out reproduces Gemma's FFN output as well through the random blocks as through the pretrained ones (validation NMSE, mean of 20 layers: 0.312 and 0.312, per-layer differences of both signs). The 0.29 nats appear only when all 20 layers train end to end together, so a local imitation score does not tell whether a donor's experts help.
+
+### What Stage 5 does not answer
+
+- **How much the projections do on their own.** In Stage 5 the trained projections still work through a frozen nonlinear block of 56.7M random parameters per layer, which they can use as random features: "random experts" is not "no experts". The share of the projections alone needs a block-free control, the same slots with the MoE block removed, $F_l(x) = W_{out}\,N_S(W_{in}\,x)$: the same 35.4M trained parameters as a rank-768 map per layer.
+- **Stored knowledge or a block that can be routed.** Random blocks lose both what the experts compute and a router matched to them and to their input (344 dead experts against 29). This run cannot say how much of the 0.29 nats is which; pretrained experts behind a random router, or the reverse, would separate the two.
+- **One random draw, one donor, one budget.** Seed 0 only: the last six checks agree to ±0.004 nats, but the spread between draws is not measured ([docs/stage5.md](docs/stage5.md) has the command for a second draw). MobileMoE-S in layout `spread` only, not MobileMoE-M in all 26 layers. 15M tokens: nothing between 5M and 15M suggests the gap closes, but a much longer run might. Random means i.i.d. with each pretrained matrix's mean and std; a control that also kept each matrix's spectrum would be stricter.
 
 ---
 
@@ -568,11 +657,14 @@ bash scripts/stage3_run.sh                                                  # St
 bash scripts/stage4_test.sh                                                 # Stage 4: gating tests on the MobileMoE-S pair
 bash scripts/stage4_run.sh 15m                                              # Stage 4: spread layout, 15M tokens from ridge init, about 14 hours
 bash scripts/stage4_validate.sh runs/stage4_spread_15m --agreement          # re-evaluation, Q/A and routing agreement for a Stage 4 run
+bash scripts/stage5_test.sh                                                 # Stage 5: unit tests, the random blocks on the real models, memory
+bash scripts/stage5_run.sh                                                  # Stage 5: Stage 4 with random frozen experts, 15M tokens, about 14 hours
+bash scripts/stage5_validate.sh                                             # Stage 5: block checks, Q/A and the report -> results/stage5_compare.md
 bash scripts/ask_stages.sh                                                  # Q/A test for every stage -> results/qa_compare.md
 uv run python -m transplant summarize                                       # one line per run and set from results/runs.csv
 ```
 
-The full guide (data mix and sources, hardware and memory budget, every script and command, checkpointing and resuming, what a run writes, the tests): **[docs/usage.md](docs/usage.md)**. Stage 4's run, configs and report: **[docs/stage4.md](docs/stage4.md)**.
+The full guide (data mix and sources, hardware and memory budget, every script and command, checkpointing and resuming, what a run writes, the tests): **[docs/usage.md](docs/usage.md)**. Stage 4's run, configs and report: **[docs/stage4.md](docs/stage4.md)**. Stage 5's: **[docs/stage5.md](docs/stage5.md)**.
 
 ### Repository layout
 
@@ -584,7 +676,8 @@ expert-transplant/
 ├── configs/
 │   ├── base.yaml                               # every default, commented
 │   ├── stages/       stage1_test.yaml, stage2_full.yaml, stage2_5m.yaml, stage3_20m.yaml,
-│   │                 stage4_spread_15m.yaml, stage4a_spread_1m.yaml, stage4b_spread_5m.yaml, stage4c_spread_20m.yaml
+│   │                 stage4_spread_15m.yaml, stage4a_spread_1m.yaml, stage4b_spread_5m.yaml, stage4c_spread_20m.yaml,
+│   │                 stage5_random_15m.yaml
 │   ├── pairs/        primary.yaml (Gemma + MobileMoE-M, all 26 layers), stage4_mobilemoe_s.yaml (MobileMoE-S, spread), tiny.yaml
 │   ├── data/         mobilemoe_pretrain_mix.yaml (Table B.1)
 │   └── hardware/     mac_m5.yaml (MPS, bf16)
@@ -599,12 +692,14 @@ expert-transplant/
 │   └── cli.py    # python -m transplant <command>
 ├── scripts/      setup.sh, m0_checks.sh, stage1_test_run.sh, stage2_full_run.sh, stage2_extend.sh, stage3_run.sh,
 │                 stage3_speed.py, stage4_test.sh, stage4_run.sh, stage4_validate.sh, stage4_compare.py,
+│                 verify_stage4_inference.py, stage5_test.sh, stage5_run.sh, stage5_validate.sh, stage5_compare.py,
+│                 verify_stage5_random.py,
 │                 ask_stages.sh, progress.py, env.sh
 ├── tests/
-├── docs/         architecture.md, usage.md, stage4.md, figures/ (banner, 4 architecture figures, 13 equation cards,
+├── docs/         architecture.md, usage.md, stage4.md, stage5.md, figures/ (banner, 4 architecture figures, 13 equation cards,
 │                 stage4/ architecture and equations, results/ charts of Stages 1-4)
 ├── notes/        local run logs (git-ignored)
-└── results/      runs.csv, qa_compare.md, stage4_compare.md
+└── results/      runs.csv, qa_compare.md, stage4_compare.md, stage5_compare.md
 ```
 
 ## Licenses

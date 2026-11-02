@@ -12,6 +12,8 @@ MoE-block output.
 from __future__ import annotations
 
 import copy
+import hashlib
+import math
 from dataclasses import dataclass
 from typing import Optional
 
@@ -482,11 +484,24 @@ def describe_layer(model_b: nn.Module, b_cfg: dict, j: int = 0) -> dict:
     }
 
 
+def _stats(t: torch.Tensor) -> tuple[float, float]:
+    """Mean and std of a tensor, computed on the CPU in fp64: the same numbers on every device, so a
+    block randomized on the GPU (ridge init) equals one randomized on the CPU (training) bit for bit."""
+    x = t.detach().cpu().double()  # to the CPU first: MPS has no fp64
+    return x.mean().item(), x.std().item()
+
+
 @torch.no_grad()
-def randomize_like(block: MoESourceBlock, seed: int = 0) -> MoESourceBlock:
+def randomize_like(block: MoESourceBlock, seed: int = 0, full: bool = False) -> MoESourceBlock:
     """Control C5: same MoE architecture, weights redrawn (per tensor, matching mean and std).
 
     Norm gains are kept so the input scale matches; every other weight is random. Frozen.
+
+    ``full`` (Stage 5) leaves no pretrained value in the block, only the scale of each tensor:
+    the fused gate-up tensor is matched half by half (gate and up have different scales in
+    MobileMoE), the per-expert selection bias is zeroed (a fresh MobileMoE starts at zero, and a
+    pretrained bias would tilt random routing), and the norm gain N_B becomes a constant, its own
+    RMS (the experts' input scale is kept, the per-channel pattern is not).
     """
     block._remove_hooks()  # hooks hold bound methods; copy the modules without them
     try:
@@ -505,8 +520,34 @@ def randomize_like(block: MoESourceBlock, seed: int = 0) -> MoESourceBlock:
     for name, param in clone.moe.named_parameters():
         if param.ndim < 2:
             continue
-        mean, std = param.float().mean().item(), param.float().std().item()
-        fresh = torch.randn(param.shape, generator=gen) * std + mean
+        fresh = torch.randn(param.shape, generator=gen, dtype=torch.float64)
+        if full and name.endswith("gate_up_proj") and param.shape[-1] % 2 == 0:
+            f = param.shape[-1] // 2
+            for half in (slice(0, f), slice(f, None)):  # gate, then up
+                mean, std = _stats(param[..., half])
+                fresh[..., half].mul_(std).add_(mean)
+        else:
+            mean, std = _stats(param)
+            fresh.mul_(std).add_(mean)
         param.copy_(fresh.to(param.dtype))
+    if full:
+        bias = clone.routing_bias()
+        if bias is not None:
+            bias.zero_()
+        for param in clone.norm.parameters():
+            if param.ndim == 1:
+                rms = math.sqrt(float(param.detach().cpu().double().pow(2).mean()))
+                param.copy_(torch.full(param.shape, rms, dtype=torch.float64).to(param.dtype))  # rounded on the CPU
     clone.requires_grad_(False)
     return clone
+
+
+def blocks_fingerprint(blocks: dict) -> str:
+    """SHA-256 (first 16 hex digits) over every tensor of the blocks, in layer and name order: the
+    same blocks give the same fingerprint on any device. Records which random draw a run used."""
+    h = hashlib.sha256()
+    for j in sorted(blocks):
+        for name, t in sorted(blocks[j].state_dict().items()):
+            h.update(f"{j}.{name}:{tuple(t.shape)}:{t.dtype}".encode())
+            h.update(t.detach().to("cpu").contiguous().view(torch.uint8).numpy().tobytes())
+    return h.hexdigest()[:16]

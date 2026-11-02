@@ -38,10 +38,12 @@ from ..models.load import (
     hidden_of,
     load_model_a,
     load_model_b_full,
+    load_moe_blocks,
     load_tokenizer,
     n_layers_of,
+    random_moe_options,
 )
-from ..models.moe_source import _bucket, extract_blocks, randomize_like
+from ..models.moe_source import _bucket, blocks_fingerprint, extract_blocks, randomize_like
 from ..utils.memory import empty_cache, memory_text
 
 
@@ -192,54 +194,70 @@ def ridge_init(cfg: dict, device: torch.device, policy, out_path: Optional[Path]
         _save(result, report, out_path)
         return result
 
-    # ---- pass 1: W_in from aligned positions --------------------------------------
-    tok_b = load_tokenizer(pair["b"], "b")
-    model_b = load_model_b_full(pair["b"], policy.b_dtype, device)
     b_layers = sorted(set(layer_map.values()))
-    blocks = extract_blocks(model_b, pair["b"], b_layers)
-    norms = {j: blocks[j].norm for j in b_layers}
-    stats_in = {i: RidgeStats(d_a, d_b, sdev, name=f"W_in, layer {i}") for i in a_layers}
-    target = rcfg.get("target", "rms_normalized")
-    n_pairs = n_tok_a = n_tok_b = 0
+    random_opts = random_moe_options(cfg)
     n_batches = math.ceil(len(texts) / bs)
-    log(f"[ridge] pass 1 of 2 (W_in): Gemma and MobileMoE read {len(texts)} calibration documents "
-        f"in {n_batches} batches; {memory_text(device)}")
-    progress = _Progress("pass 1", n_batches, device, log)
-    for k, chunk in _batches(texts, bs):
-        ab = encode_aligned(tok_a, tok_b, chunk, seq_len, skip_first=True)
-        split = "val" if k % val_every == val_every - 1 else "train"
-        with torch.no_grad():
-            # no attention masks: right padding cannot reach earlier positions (module docstring)
-            with capture_ffn_io(model_a, a_layers, want_output=False, stop_after=max(a_layers)) as sa:
-                run_until(model_a, input_ids=ab.ids_a.to(device))
-            with capture_module_inputs(norms, stop_after=max(b_layers)) as sb:
-                run_until(model_b, input_ids=ab.ids_b.to(device))
-        rows, pa, pb, keep, n_real = _padded_pairs(ab, device)
-        for i, j in layer_map.items():
-            valid = keep[:, None] > 0
-            x = torch.where(valid, sa[i]["x"][rows, pa].float(), 0.0)
-            y = sb[j][rows, pb]
-            y = torch.where(valid, _rms_normalize(y) if target == "rms_normalized" else y.float(), 0.0)
-            stats_in[i].add(x, y, split, n=n_real)
-        del sa, sb
-        n_pairs += ab.n_pairs
-        n_tok_a += ab.n_tokens_a
-        n_tok_b += ab.n_tokens_b
-        progress.step(k, int(ab.mask_a.sum()))
-    report["aligned_share_of_a_tokens"] = n_pairs / max(n_tok_a, 1)
-    report["aligned_share_of_b_tokens"] = n_pairs / max(n_tok_b, 1)
-    log(f"[ridge] aligned positions: {n_pairs} ({report['aligned_share_of_a_tokens']:.1%} of Gemma tokens)")
-    w_in = {}
-    for i in a_layers:
-        w, info = stats_in[i].solve(lambdas)
-        w_in[i] = w.T.float()  # (d_B, d_A)
-        report["layers"][i] = {"b_layer": layer_map[i], "w_in": info}
-        log(f"[ridge] layer {i}: W_in lambda={info['lambda']:g} val_nmse={info['val_nmse']:.4f}")
-    del stats_in, model_b, norms
-    empty_cache(device)  # MobileMoE's attention and embeddings go; its MoE blocks stay for pass 2
+    w_in_from = rcfg.get("w_in_from")
+    if w_in_from:
+        # ---- pass 1 skipped: W_in as it is from another ridge init (Stage 5 takes Stage 4's) ----
+        # Both runs then start from the identical W_in, and only W_out is fitted to the blocks in the
+        # slot; MobileMoE's forward pass is not needed, only its MoE blocks.
+        w_in = _w_in_from(Path(w_in_from), a_layers, d_a, d_b)
+        report["w_in_from"] = str(w_in_from)
+        for i in a_layers:
+            report["layers"][i] = {"b_layer": layer_map[i], "w_in": {"from": str(w_in_from)}}
+        log(f"[ridge] pass 1 skipped: W_in of {len(w_in)} layers taken from {w_in_from}")
+        blocks = load_moe_blocks(pair["b"], b_layers, policy, device, randomize=(inner_kind == "random_moe_b"),
+                                 **random_opts)
+    else:
+        # ---- pass 1: W_in from aligned positions --------------------------------------
+        tok_b = load_tokenizer(pair["b"], "b")
+        model_b = load_model_b_full(pair["b"], policy.b_dtype, device)
+        blocks = extract_blocks(model_b, pair["b"], b_layers)
+        norms = {j: blocks[j].norm for j in b_layers}
+        stats_in = {i: RidgeStats(d_a, d_b, sdev, name=f"W_in, layer {i}") for i in a_layers}
+        target = rcfg.get("target", "rms_normalized")
+        n_pairs = n_tok_a = n_tok_b = 0
+        log(f"[ridge] pass 1 of 2 (W_in): Gemma and MobileMoE read {len(texts)} calibration documents "
+            f"in {n_batches} batches; {memory_text(device)}")
+        progress = _Progress("pass 1", n_batches, device, log)
+        for k, chunk in _batches(texts, bs):
+            ab = encode_aligned(tok_a, tok_b, chunk, seq_len, skip_first=True)
+            split = "val" if k % val_every == val_every - 1 else "train"
+            with torch.no_grad():
+                # no attention masks: right padding cannot reach earlier positions (module docstring)
+                with capture_ffn_io(model_a, a_layers, want_output=False, stop_after=max(a_layers)) as sa:
+                    run_until(model_a, input_ids=ab.ids_a.to(device))
+                with capture_module_inputs(norms, stop_after=max(b_layers)) as sb:
+                    run_until(model_b, input_ids=ab.ids_b.to(device))
+            rows, pa, pb, keep, n_real = _padded_pairs(ab, device)
+            for i, j in layer_map.items():
+                valid = keep[:, None] > 0
+                x = torch.where(valid, sa[i]["x"][rows, pa].float(), 0.0)
+                y = sb[j][rows, pb]
+                y = torch.where(valid, _rms_normalize(y) if target == "rms_normalized" else y.float(), 0.0)
+                stats_in[i].add(x, y, split, n=n_real)
+            del sa, sb
+            n_pairs += ab.n_pairs
+            n_tok_a += ab.n_tokens_a
+            n_tok_b += ab.n_tokens_b
+            progress.step(k, int(ab.mask_a.sum()))
+        report["aligned_share_of_a_tokens"] = n_pairs / max(n_tok_a, 1)
+        report["aligned_share_of_b_tokens"] = n_pairs / max(n_tok_b, 1)
+        log(f"[ridge] aligned positions: {n_pairs} ({report['aligned_share_of_a_tokens']:.1%} of Gemma tokens)")
+        w_in = {}
+        for i in a_layers:
+            w, info = stats_in[i].solve(lambdas)
+            w_in[i] = w.T.float()  # (d_B, d_A)
+            report["layers"][i] = {"b_layer": layer_map[i], "w_in": info}
+            log(f"[ridge] layer {i}: W_in lambda={info['lambda']:g} val_nmse={info['val_nmse']:.4f}")
+        del stats_in, model_b, norms
+        empty_cache(device)  # MobileMoE's attention and embeddings go; its MoE blocks stay for pass 2
 
+        if inner_kind == "random_moe_b":
+            blocks = {j: randomize_like(b, **random_opts) for j, b in blocks.items()}
     if inner_kind == "random_moe_b":
-        blocks = {j: randomize_like(b, seed=int(cfg.get("run", {}).get("seed", 0))) for j, b in blocks.items()}
+        report["random_moe"] = {**random_opts, "fingerprint": blocks_fingerprint(blocks)}
     for b in blocks.values():
         b.to(device=device, dtype=policy.b_dtype)
         b.shared_enabled = bool(cfg["transplant"].get("shared_expert", True))  # ablation AB6
@@ -289,3 +307,16 @@ def _save(result: dict, report: dict, out_path: Optional[Path]) -> None:
 
 def load_init(path: str | Path) -> dict:
     return {int(k): v for k, v in torch.load(path, map_location="cpu").items()}
+
+
+def _w_in_from(path: Path, a_layers: list[int], d_a: int, d_b: int) -> dict[int, torch.Tensor]:
+    """W_in of every A layer from another ridge init file (``ridge.w_in_from``): same layers, same shapes."""
+    if not path.exists():
+        raise FileNotFoundError(f"ridge.w_in_from: {path} does not exist (train the run it comes from first)")
+    init = load_init(path)
+    missing = [i for i in a_layers if i not in init]
+    bad = [i for i in a_layers if i in init and tuple(init[i]["w_in"].shape) != (d_b, d_a)]
+    if missing or bad:
+        raise ValueError(f"ridge.w_in_from: {path} does not fit this run (layers missing: {missing}; "
+                         f"W_in not ({d_b}, {d_a}) in layers {bad})")
+    return {i: init[i]["w_in"].float() for i in a_layers}

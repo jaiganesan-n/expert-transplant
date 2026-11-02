@@ -1,0 +1,34 @@
+# Stage 5, the random-expert control of Stage 4: did MobileMoE-S's pretrained experts contribute?
+#   bash scripts/stage5_run.sh
+# Everything is Stage 4's (configs/stages/stage4_spread_15m.yaml): Gemma 3 1B, layout spread (20 MoE
+# layers, Gemma's FFN kept in layers 2, 6, 10, 15, 19, 23), the same 35.4M trainable W_in / W_out, the
+# same 15M tokens in the same order, the same recipe and evaluation. One thing changes: the 20 MoE
+# blocks keep MobileMoE-S's architecture (60 routed SwiGLU experts 768 -> 384 -> 768, top-4 sigmoid
+# routing scaled by 2.5, a shared expert 768 -> 1536 -> 768, the norm in front) but every weight is
+# random, drawn at the scale of the pretrained tensor it replaces, and frozen.
+# Init: Stage 4's ridge W_in as it is; W_out fitted by ridge through the random blocks.
+include:
+  - ../pairs/stage4_mobilemoe_s.yaml
+run:
+  name: stage5_random_15m
+  experiment: stage5_random
+  tokens: 15_000_000      # 915 steps of 16,384 tokens (14,991,360), as Stage 4
+  local_share: 0.0
+local:
+  enabled: false
+transplant:
+  inner: random_moe_b     # control C5: MobileMoE-S's block, every weight redrawn, frozen
+  random_moe:
+    seed: 0               # the random draw (run.seed stays 0: the same documents as Stage 4)
+    full: true            # no pretrained value left: each matrix N(its mean, its std), gate and up halves
+                          # apart; selection bias 0; norm gain = its own RMS
+  init_path: runs/stage5_random_init/init.pt   # ridge for the random blocks (made on the first run)
+ridge:
+  max_docs: 400           # the calibration of Stages 1-4
+  w_in_from: runs/stage4_spread_init/init.pt   # Stage 4's W_in, so both runs start from the same W_in
+eval:
+  every_steps: 100        # Stage 4's 9 checks on 100k held-out tokens, at the same token counts
+  subset_tokens: 100_000
+  final_tokens: 250_000   # as Stages 1-4
+checkpoint:
+  every_minutes: 10

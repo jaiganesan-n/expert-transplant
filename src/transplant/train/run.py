@@ -102,12 +102,36 @@ def _init_matrices(cfg: dict, device, policy, run_dir: Path, log=print) -> Optio
             log(f"[init] {cand} was made for other layers or another Model B "
                 f"({len(shapes)} layers, W_in {next(iter(shapes.values()), None)}); not used")
             continue
+        made_for = _init_made_for(cand)
+        if made_for != _blocks_of(cfg):
+            log(f"[init] {cand} fits W_out to other MoE blocks ({made_for}, this run: {_blocks_of(cfg)}); not used")
+            continue
         log(f"[init] reusing {cand}")
         return init
-    if expected is not None and path.exists():  # the shared file belongs to another setup: keep it, use the run's own
+    if path.exists():  # the shared file belongs to another setup (layers, Model B or blocks): keep it, use the run's own
         path = run_dir / "init.pt"
     log(f"[init] ridge init -> {path}")
     return ridge_init(cfg, device, policy, out_path=path, log=log)
+
+
+def _blocks_of(cfg: dict) -> dict:
+    """What sits in the MoE slots, as far as ridge W_out depends on it: the inner kind, and for the
+    random control (C5, Stage 5) which draw."""
+    from ..models.load import random_moe_options
+
+    inner = cfg["transplant"].get("inner", "moe_b")
+    return {"inner": inner, **(random_moe_options(cfg) if inner == "random_moe_b" else {})}
+
+
+def _init_made_for(path: Path) -> dict:
+    """The same description, from the report ridge init wrote next to ``path`` (Stages 1-4: pretrained blocks)."""
+    try:
+        rep = json.loads(path.with_suffix(".json").read_text())
+    except (OSError, ValueError):
+        rep = {}
+    inner = rep.get("inner", "moe_b")
+    drawn = rep.get("random_moe") or {}
+    return {"inner": inner, **({k: drawn.get(k) for k in ("seed", "full")} if inner == "random_moe_b" else {})}
 
 
 def _expected_init_shapes(cfg: dict) -> Optional[dict]:
@@ -179,6 +203,13 @@ def _run_training(cfg: dict, run_dir: Path, resume: bool, stop_after: Optional[s
     n_a = len(surgery.decoder_layers(hybrid.model))
     info["kept_ffn_layers"] = [i for i in range(n_a) if i not in hybrid.layer_map]
     info["model_b"] = {"model_id": cfg["pair"]["b"].get("model_id"), "revision": _b_revision(cfg["pair"]["b"])}
+    info["inner"] = hybrid.inner_kind
+    if hybrid.inner_kind == "random_moe_b":  # the random draw this run trained with (Stage 5)
+        from ..models.load import random_moe_options
+        from ..models.moe_source import blocks_fingerprint
+
+        info["random_moe"] = {**random_moe_options(cfg), "fingerprint": blocks_fingerprint(hybrid.blocks)}
+        log(f"[run] random MoE blocks (control C5): {info['random_moe']}")
     logger.write_json("run_info.json", info)
     log(f"[run] transplanted layers {hybrid.a_layers}; trainable params {info['trainable_params']:,}"
         + (f"; Gemma's own FFN kept in layers {info['kept_ffn_layers']}" if info["kept_ffn_layers"] else ""))

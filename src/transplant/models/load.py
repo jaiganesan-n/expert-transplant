@@ -146,17 +146,28 @@ class Hybrid:
         return surgery.trainable_parameters(self.model)
 
 
+def random_moe_options(cfg: dict) -> dict:
+    """How control C5 draws its random blocks: ``transplant.random_moe`` {seed, full}. The seed
+    defaults to ``run.seed``; set it on its own to draw other blocks without changing the data
+    (``run.seed`` also picks which documents the training stream skips)."""
+    opts = cfg.get("transplant", {}).get("random_moe") or {}
+    seed = opts.get("seed")
+    return {"seed": int(cfg.get("run", {}).get("seed", 0) if seed is None else seed), "full": bool(opts.get("full", False))}
+
+
 def load_moe_blocks(
-    b_cfg: dict, b_layers: list[int], policy: PrecisionPolicy, device: torch.device, randomize: bool = False, seed: int = 0
+    b_cfg: dict, b_layers: list[int], policy: PrecisionPolicy, device: torch.device, randomize: bool = False, seed: int = 0,
+    full: bool = False,
 ) -> dict[int, MoESourceBlock]:
     model_b = load_model_b_full(b_cfg, dtype=policy.b_dtype, device="cpu")
     blocks = extract_blocks(model_b, b_cfg, b_layers)
     del model_b
     gc.collect()
     out = {}
-    for j, block in blocks.items():
+    for j in list(blocks):
+        block = blocks.pop(j)  # a randomized block's pretrained original is freed before the next one is copied
         if randomize:
-            block = randomize_like(block, seed=seed)
+            block = randomize_like(block, seed=seed, full=full)
         block.to(device=device, dtype=policy.b_dtype)
         block.requires_grad_(False)
         block.eval()
@@ -198,7 +209,7 @@ def build_hybrid(
             policy,
             device,
             randomize=(inner_kind == "random_moe_b"),
-            seed=int(cfg.get("run", {}).get("seed", 0)),
+            **random_moe_options(cfg),
         )
 
     kind = tcfg.get("projection", "linear")
