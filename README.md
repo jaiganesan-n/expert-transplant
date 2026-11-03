@@ -28,10 +28,10 @@
 
 Training, testing and evaluation code for one question: **can a frozen Mixture-of-Experts layer from one pretrained language model replace the feed-forward network (FFN) of another, independently trained model, if only two small projection matrices per layer are trained?**
 
-Gemma 3 1B (dense) is the host. In Stages 1 to 3 the donor is MobileMoE-M-Base and all 26 of Gemma's FFNs are replaced by its MoE blocks, each between two trainable projections. Stage 4 changes the architecture: MobileMoE-S-Base's 20 MoE blocks replace 20 of Gemma's FFNs at the same relative depth, and Gemma keeps its own FFN in the other 6 layers. Both models always stay frozen. Everything trains and runs on a MacBook Air M5 (16 GB, PyTorch MPS, bf16), with packages installed by [uv](https://docs.astral.sh/uv/).
+Gemma 3 1B (dense) is the host. In Stages 1 to 3 the donor is MobileMoE-M-Base and all 26 of Gemma's FFNs are replaced by its MoE blocks, each between two trainable projections. Stage 4 changes the architecture: MobileMoE-S-Base's 20 MoE blocks replace 20 of Gemma's FFNs at the same relative depth, and Gemma keeps its own FFN in the other 6 layers. Stage 5 repeats Stage 4 with random, frozen experts of the same architecture, as a control. Both models always stay frozen. Everything trains and runs on a MacBook Air M5 (16 GB, PyTorch MPS, bf16), with packages installed by [uv](https://docs.astral.sh/uv/).
 
 > [!NOTE]
-> **Objective.** Project J'AI started from a plain question: if I remove the FFNs of one model and put the MoE layers of a different model in their place, will the result still work as a language model? I just wanted to know whether it works or not. It looks like it does. The trained projection matrices in each slot (W_in and W_out, the transformation layer between the two hidden sizes) learn to translate between the two models, so that one model's embeddings and attention can communicate with another model's MoE experts.
+> **Objective.** Project J'AI started from a plain question: if I remove the FFNs of one model and put the MoE layers of a different model in their place, will the result still work as a language model? I just wanted to know whether it works or not. It looks like it does. My read is that the trained projection matrices in each slot (W_in and W_out, the transformation layer between the two hidden sizes) learn to translate between the two models, so that one model's embeddings and attention can communicate with another model's MoE experts. The evidence is indirect: before any training, a linear W_in already reproduces most of the donor's own MoE input (validation NMSE 0.22 to 0.44 per layer, Sections [3](#ridge-and-local-matching) and [6.4](#64-ridge-init-with-two-donors)), and with random experts in the same slots the hybrid ends 0.29 nats worse ([Section 7](#7-stage-5-the-random-expert-control)), so what the projections deliver is something the pretrained experts can use.
 
 | Contents | |
 | --- | --- |
@@ -50,7 +50,7 @@ Gemma 3 1B (dense) is the host. In Stages 1 to 3 the donor is MobileMoE-M-Base a
 
 A dense transformer stores much of what it knows in its FFNs. A Mixture of Experts replaces one large FFN with many small experts and a router that picks a few per token. **Project J'AI** tests whether the MoE layers of one pretrained model are functionally portable: can they stand in for the FFNs of a model that never trained with them, if a learned transformation on each side translates between the two models' hidden states?
 
-The transformation is a pair of linear maps per layer: **W_in** maps Gemma's hidden state into MobileMoE's space (1152 → 1024) and **W_out** maps the MoE block's output back (1024 → 1152). They are two independent matrices, not one matrix and its transpose. Nothing else trains.
+The transformation is a pair of linear maps per layer: **W_in** maps Gemma's hidden state into MobileMoE's space (1152 → 1024 for MobileMoE-M in Stages 1 to 3, 1152 → 768 for MobileMoE-S in Stages 4 and 5) and **W_out** maps the MoE block's output back (1024 or 768 → 1152). They are two independent matrices, not one matrix and its transpose. Nothing else trains.
 
 ### Hypotheses
 
@@ -68,7 +68,7 @@ The project tests three hypotheses:
 | --- | --- | --- | --- | --- | --- | --- |
 | A (host, dense) | [`google/gemma-3-1b-pt`](https://huggingface.co/google/gemma-3-1b-pt) | 26 × 1152 | GeGLU, hidden 6912 | Gemma 3, 262,144 | 1.0B | Gemma Terms of Use (gated) |
 | B (donor, Stages 1-3) | [`facebook/MobileMoE-M-Base`](https://huggingface.co/facebook/MobileMoE-M-Base) | 26 × 1024 | 60 routed (hidden 512), top-4 sigmoid, + 1 shared (hidden 2048) | Llama 3, 128,256 | 2.8B total, 528M active | FAIR Noncommercial Research (gated) |
-| B′ (donor, Stage 4) | [`facebook/MobileMoE-S-Base`](https://huggingface.co/facebook/MobileMoE-S-Base) | 20 × 768 | 60 routed (hidden 384), top-4 sigmoid, + 1 shared (hidden 1536) | Llama 3, 128,256 | 1.3B total, 272M active | FAIR Noncommercial Research (gated separately) |
+| B′ (donor, Stages 4-5; random weights in Stage 5) | [`facebook/MobileMoE-S-Base`](https://huggingface.co/facebook/MobileMoE-S-Base) | 20 × 768 | 60 routed (hidden 384), top-4 sigmoid, + 1 shared (hidden 1536) | Llama 3, 128,256 | 1.3B total, 272M active | FAIR Noncommercial Research (gated separately) |
 
 In Stages 1 to 3 both models have 26 layers, so Gemma layer i borrows MobileMoE-M layer i; Stage 4's layer map is in Section 6. Widths, tokenizers and FFN designs all differ. Gemma 3's training data was never released, so the training data is MobileMoE-M-Base's open pre-training mix (Table B.1 of [the MobileMoE paper](https://arxiv.org/abs/2605.27358): web 62%, math 11.6%, code 10%, knowledge 10%, science 6.4%), streamed from Hugging Face; held-out documents of the same mix, WikiText-103 and C4 are used only for evaluation.
 
@@ -99,7 +99,7 @@ This section describes the hybrid of Stages 1 to 3 (all 26 layers, MobileMoE-M);
 ![The hybrid end to end](docs/figures/fig1_end_to_end.png)
 
 $$
-X^{(0)} = \sqrt{1152}\,E_A[t], \qquad X^{(l)} = \mathrm{Layer}^{\mathrm{hyb}}_l\big(X^{(l-1)}\big), \qquad P = \mathrm{softmax}\big(N_f(X^{(26)})\,E_A^{\top}\big)
+X^{(0)} = \sqrt{1152}\thinspace E_A[t], \qquad X^{(l)} = \mathrm{Layer}^{\mathrm{hyb}}_l\big(X^{(l-1)}\big), \qquad P = \mathrm{softmax}\big(N_f(X^{(26)})\thinspace E_A^{\top}\big)
 $$
 
 Embeddings, attention, norms and the LM head stay Gemma's and stay frozen. MobileMoE contributes only its pre-MoE norms, routers and experts; its attention, embeddings and head are never loaded onto the GPU.
@@ -117,7 +117,7 @@ $$
 The transplant keeps the sandwich and replaces only the FFN slot (`layer.mlp`):
 
 $$
-h^{\mathrm{out}}_t = h_t + P_A\Big(W_{out}\;\mathrm{MoE}_B\big(N_B(W_{in}\,x_t)\big)\Big), \qquad x_t = N_A(h_t) \in \mathbb{R}^{1152}
+h^{\mathrm{out}}_t = h_t + P_A\Big(W_{out}\ \mathrm{MoE}_B\big(N_B(W_{in}\thinspace x_t)\big)\Big), \qquad x_t = N_A(h_t) \in \mathbb{R}^{1152}
 $$
 
 Read it right to left: translate Gemma's state into MobileMoE's coordinates, let MobileMoE's norm $N_B$ and experts work there, translate back. An RMSNorm follows each projection ($N_B$ after $W_{in}$, $P_A$ after $W_{out}$), and RMSNorm ignores scale, so only the direction of each projection's output reaches the next stage:
@@ -133,11 +133,11 @@ In code this is `ReplaceFFN` in [`src/transplant/models/surgery.py`](src/transpl
 ![Routing one token](docs/figures/fig3_moe_routing.png)
 
 $$
-\hat u_t = N_B(u_t), \qquad s_t = \sigma(W_r\,\hat u_t) \in (0,1)^{60}, \qquad \mathcal{T}_t = \mathrm{TopK}(s_t + b,\ 4), \qquad g_{t,e} = 2.5\,\frac{s_{t,e}}{\sum_{e' \in \mathcal{T}_t} s_{t,e'}}
+\hat u_t = N_B(u_t), \qquad s_t = \sigma(W_r\thinspace\hat u_t) \in (0,1)^{60}, \qquad \mathcal{T}_t = \mathrm{TopK}(s_t + b,\ 4), \qquad g_{t,e} = 2.5\thinspace\frac{s_{t,e}}{\sum_{e' \in \mathcal{T}_t} s_{t,e'}}
 $$
 
 $$
-m_t = S(\hat u_t) + \sum_{e \in \mathcal{T}_t} g_{t,e}\,E_e(\hat u_t)
+m_t = S(\hat u_t) + \sum_{e \in \mathcal{T}_t} g_{t,e}\thinspace E_e(\hat u_t)
 $$
 
 Each of the 60 experts gets an independent sigmoid score; a fixed per-expert bias $b$ decides which four are selected but not their weights; the chosen four are normalized and scaled to sum to 2.5; the shared expert $S$ is always on. Routing is dropless: every expert runs on exactly the tokens routed to it. The router is frozen, so **W_in alone decides which experts a token reaches**; the routing-health metrics watch for collapse. On the Apple GPU the block runs through `bucketed_moe_forward` (same arithmetic, expert groups padded to a few fixed sizes, one GPU sync per layer).
@@ -166,16 +166,16 @@ $$
 **Local matching.** Each layer learns, on its own, to imitate the FFN it replaced; one pass of the original Gemma supplies inputs and targets for all 26 layers. Predicting zero, which is what a deleted FFN does, scores exactly 1:
 
 $$
-\mathcal{L}_1 = \frac{\sum_t \Vert \hat y_t - y_t\Vert^2}{\sum_t \Vert y_t\Vert^2}, \qquad \hat y_t = W_{out}\,\mathrm{MoE}_B\big(N_B(W_{in}x_t)\big), \qquad y_t = \mathrm{FFN}_A(x_t)
+\mathcal{L}_1 = \frac{\sum_t \Vert \hat y_t - y_t\Vert^2}{\sum_t \Vert y_t\Vert^2}, \qquad \hat y_t = W_{out}\thinspace\mathrm{MoE}_B\big(N_B(W_{in}x_t)\big), \qquad y_t = \mathrm{FFN}_A(x_t)
 $$
 
 **End to end.** Next-token cross-entropy through Gemma's head, plus a KL term to the original Gemma (the same weights with the transplants switched off):
 
 $$
-\mathcal{L}_2 = \mathrm{CE}(y, p_{hyb}) + \beta\,\mathrm{KL}(p_A \Vert p_{hyb}), \qquad \beta = 1
+\mathcal{L}_2 = \mathrm{CE}(y, p_{hyb}) + \beta\thinspace\mathrm{KL}(p_A \Vert p_{hyb}), \qquad \beta = 1
 $$
 
-Gemma's 262,144-token vocabulary makes the logits of one 1,024-token sequence 1.07 GB in fp32, so CE and KL are computed 256 positions at a time with a hand-written backward pass ($\partial L/\partial z = (g_{CE} + g_{KL})\,\mathrm{softmax}(z) - g_{CE}\,\mathrm{onehot}(y) - g_{KL}\,p_A$, recomputed per chunk). Right-padded batches run without an attention mask: on Apple GPUs a mask beyond Gemma's 512-token sliding window produces NaN, and both models are causal, so padding cannot reach the text.
+Gemma's 262,144-token vocabulary makes the logits of one 1,024-token sequence 1.07 GB in fp32, so CE and KL are computed 256 positions at a time with a hand-written backward pass ($\partial L/\partial z = (g_{CE} + g_{KL})\thinspace\mathrm{softmax}(z) - g_{CE}\thinspace\mathrm{onehot}(y) - g_{KL}\thinspace p_A$, recomputed per chunk). Right-padded batches run without an attention mask: on Apple GPUs a mask beyond Gemma's 512-token sliding window produces NaN, and both models are causal, so padding cannot reach the text.
 
 | Setting | Local matching | End to end |
 | --- | --- | --- |
@@ -192,7 +192,7 @@ $$
 $$
 
 $$
-\tilde H = -\frac{1}{\log 60}\sum_{e} f_e \log f_e \ \ge\ 0.7, \qquad \text{fact recovery} = \frac{\ell_{\mathrm{hybrid}} - \ell_{\mathrm{no\,FFN}}}{\ell_{A} - \ell_{\mathrm{no\,FFN}}}
+\tilde H = -\frac{1}{\log 60}\sum_{e} f_e \log f_e \ \ge\ 0.7, \qquad \text{fact recovery} = \frac{\ell_{\mathrm{hybrid}} - \ell_{\mathrm{no\thinspace FFN}}}{\ell_{A} - \ell_{\mathrm{no\thinspace FFN}}}
 $$
 
 `GR_CE` places the hybrid between "all FFNs deleted" (0) and Gemma (1) in loss space. Deleting all 26 FFNs sends perplexity to about 5 million, so `GR_CE` is generous; the CE gap, the perplexity ratio and next-token accuracy are reported beside it. $\tilde H$ is the normalized entropy of expert load per layer ($f_e$: expert $e$'s share of the top-4 assignments). Fact recovery does for questions what `GR_CE` does for text, on $\ell$, the mean log-probability per token of the right fact after the reference sentence's opening ("The capital of France is" → "Paris").
@@ -334,8 +334,8 @@ An extension restarts the learning rate from the peak:
 
 $$
 \theta^{(3)}_0 = \theta^{(2)}_{\mathrm{final}}, \qquad
-\eta(s) = \begin{cases} \eta_{\max}\, s / s_w, & s < s_w \\ \eta_{\min} + \tfrac{1}{2}(\eta_{\max} - \eta_{\min})\Big(1 + \cos\dfrac{\pi (s - s_w)}{S - s_w}\Big), & s \ge s_w \end{cases}
-\qquad \eta_{\max} = 3 \cdot 10^{-4},\ \eta_{\min} = 0.1\,\eta_{\max},\ s_w = 0.02\,S,\ S = 915
+\eta(s) = \begin{cases} \eta_{\max}\thinspace s / s_w, & s < s_w \cr \eta_{\min} + \tfrac{1}{2}(\eta_{\max} - \eta_{\min})\Big(1 + \cos\dfrac{\pi (s - s_w)}{S - s_w}\Big), & s \ge s_w \end{cases}
+\qquad \eta_{\max} = 3 \cdot 10^{-4},\ \eta_{\min} = 0.1\thinspace\eta_{\max},\ s_w = 0.02\thinspace S,\ S = 915
 $$
 
 ### The held-out curve
@@ -429,22 +429,22 @@ Right: Paris, Tokyo, Portuguese, Jupiter, gravity, blue. The fact became more li
 Every MobileMoE-S layer is used once, at its relative depth in Gemma; the Gemma layers no donor layer reaches keep their own FFN, frozen and without projections:
 
 $$
-l(j) = \mathrm{round}\Big(j \cdot \frac{L_A - 1}{L_B - 1}\Big) = \mathrm{round}\Big(\frac{25\,j}{19}\Big), \quad j = 0, \dots, 19, \qquad
-\mathcal{K} = \{0, \dots, 25\} \setminus \{l(j)\} = \{2, 6, 10, 15, 19, 23\}
+l(j) = \mathrm{round}\Big(j \cdot \frac{L_A - 1}{L_B - 1}\Big) = \mathrm{round}\Big(\frac{25\thinspace j}{19}\Big), \quad j = 0, \dots, 19, \qquad
+\mathcal{K} = \lbrace 0, \dots, 25\rbrace \setminus \lbrace l(j)\rbrace = \lbrace 2, 6, 10, 15, 19, 23\rbrace
 $$
 
 Map: 0←0, 1←1, 3←2, 4←3, 5←4, 7←5, 8←6, 9←7, 11←8, 12←9, 13←10, 14←11, 16←12, 17←13, 18←14, 20←15, 21←16, 22←17, 24←18, 25←19 (Gemma layer ← MobileMoE-S layer). Each Gemma layer keeps its sandwich norms; the FFN slot holds either Gemma's own FFN or the transplant:
 
 $$
 h^{\mathrm{out}}_t = h_t + P_A\big(F_l(x_t)\big), \quad x_t = N_A(h_t), \qquad
-F_l = \begin{cases} \mathrm{FFN}^{(l)}_A, & l \in \mathcal{K} \\ W^{(l)}_{out}\; \mathrm{MoE}^{(j)}_S\big(N_S(W^{(l)}_{in}\, x_t)\big), & l = l(j) \end{cases}
+F_l = \begin{cases} \mathrm{FFN}^{(l)}_A, & l \in \mathcal{K} \cr W^{(l)}_{out}\ \mathrm{MoE}^{(j)}_S\big(N_S(W^{(l)}_{in}\thinspace x_t)\big), & l = l(j) \end{cases}
 $$
 
 with $W_{in}^{(l)} \in \mathbb{R}^{768 \times 1152}$ and $W_{out}^{(l)} \in \mathbb{R}^{1152 \times 768}$. MobileMoE-S's block has the same design as MobileMoE-M's:
 
 $$
-s = \sigma(W_r\, u) \in (0,1)^{60}, \qquad \mathcal{T} = \mathrm{TopK}(s + b,\ 4), \qquad g_e = \lambda\,\frac{s_e}{\sum_{e' \in \mathcal{T}} s_{e'}}, \qquad
-\mathrm{MoE}_S(u) = S(u) + \sum_{e \in \mathcal{T}} g_e\, E_e(u), \quad u = N_S(W_{in}\, x_t)
+s = \sigma(W_r\thinspace u) \in (0,1)^{60}, \qquad \mathcal{T} = \mathrm{TopK}(s + b,\ 4), \qquad g_e = \lambda\thinspace\frac{s_e}{\sum_{e' \in \mathcal{T}} s_{e'}}, \qquad
+\mathrm{MoE}_S(u) = S(u) + \sum_{e \in \mathcal{T}} g_e\thinspace E_e(u), \quad u = N_S(W_{in}\thinspace x_t)
 $$
 
 where $S$ is the always-on shared expert (768 → 1536 → 768), the $E_e$ are the 60 routed experts (768 → 384 → 768), $b$ is the fixed selection bias and $\lambda$ the routed scaling factor from MobileMoE-S's config.
@@ -640,9 +640,11 @@ With random experts routing is narrow from the first check (lowest entropy 0.64 
 
 - **H3: yes, the pretrained experts contributed.** +0.29 nats on the mix, three times the margin set before the run, with everything else identical and both arms checked on the real models: 13 of 13 checks on the random blocks (`scripts/verify_stage5_random.py`), 10 of 10 on Stage 4's (`scripts/verify_stage4_inference.py`: MobileMoE-S's checkpoint bit for bit, nothing initialised at random). The difference is as large on WikiText-103 and C4 (+0.33, +0.30), so it is not a by-product of training on MobileMoE's own pre-training mix.
 - **Facts depend on the experts most.** With random experts the fact log-probability falls by 1.1 nats per token, against 0.29 nats per token on running text; the loss is in world knowledge (geography, science, history, everyday facts), not in arithmetic. A frozen pretrained block gives the trained projections far more to work with for facts than a random block of the same shape.
-- **Most of the repair does not need pretrained experts.** Random blocks with trained projections bring the CE gap from 13.09 (all 26 deleted) or 18.31 (the layout floor) down to 1.11: `GR_CE` 0.915, fact recovery 81%. What turns a Gemma without FFNs back into a language model is mostly Gemma's own frozen parts (attention, embeddings, the 6 kept FFNs, the head) and 35.4M trained parameters that put a well-formed vector back into every FFN slot, through a frozen nonlinear block. The pretrained experts then cut the remaining gap by 27% on the mix (1.110 → 0.815) and by 20-22% on unlike text.
+- **Most of the repair does not need pretrained experts.** Random blocks with trained projections bring the CE gap from 13.09 (all 26 deleted) or 18.31 (the layout floor) down to 1.11: `GR_CE` 0.915, fact recovery 81%. What turns a Gemma without FFNs back into a language model is mostly Gemma's own frozen parts (attention, embeddings, the 6 kept FFNs, the head) and 35.4M trained parameters that put a well-formed vector back into every FFN slot, through a frozen nonlinear block. The pretrained experts then cut the remaining gap by 27% on the mix (1.110 → 0.815) and by 20-21% on unlike text.
 - **Stage 4's reading needs correcting.** Stage 4 matched Stage 3 with a much weaker donor, which looked as if the experts did not matter much. With random experts the same layout is at 1.14 after 14.75M tokens, behind all 26 layers with MobileMoE-M's pretrained experts at the same tokens (0.92). MobileMoE-S's experts are part of why Stage 4 matches Stage 3.
 - **A per-layer linear check cannot see the difference.** Before training, ridge W_out reproduces Gemma's FFN output as well through the random blocks as through the pretrained ones (validation NMSE, mean of 20 layers: 0.312 and 0.312, per-layer differences of both signs). The 0.29 nats appear only when all 20 layers train end to end together, so a local imitation score does not tell whether a donor's experts help.
+- **One random draw, one training seed.** Stage 5 is a single run, with one draw of the random blocks (seed 0) and one training seed, as is Stage 4; how much the +0.29 nats would vary over draws and seeds is not measured.
+
 ---
 
 ## Run it
@@ -705,7 +707,7 @@ expert-transplant/
 
 ## Licenses
 
-Code: Apache 2.0 (`LICENSE`). Models and datasets keep their own terms; `THIRD_PARTY_LICENSES.md` summarizes those of Stages 1-3: MobileMoE-M-Base is non-commercial research only, Gemma has its own terms, and Natural Reasoning is CC-BY-NC-4.0. MobileMoE-S-Base, used in Stage 4 and not listed there, is gated separately under the same FAIR Noncommercial Research License. Trained projections are derived from Gemma and the MobileMoE model they were trained with; share them only as those licenses allow. The charts in `docs/figures/results/` are drawn from the run files of Stages 1 to 5 (Stage 5's by `docs/figures/src/make_stage5_figures.py`); `docs/figures/stage4/` comes from `docs/figures/src/make_stage4_figures.py`, and the banner from `docs/figures/src/make_banner.py`.
+Code: Apache 2.0 (`LICENSE`). Models and datasets keep their own terms; `THIRD_PARTY_LICENSES.md` summarizes those of Stages 1-3: MobileMoE-M-Base is non-commercial research only, Gemma has its own terms, and Natural Reasoning is CC-BY-NC-4.0. MobileMoE-S-Base, used in Stages 4 and 5 and not listed there, is gated separately under the same FAIR Noncommercial Research License. Trained projections are derived from Gemma and the MobileMoE model they were trained with; share them only as those licenses allow. The charts in `docs/figures/results/` are drawn from the run files of Stages 1 to 5 (Stage 5's by `docs/figures/src/make_stage5_figures.py`); `docs/figures/stage4/` comes from `docs/figures/src/make_stage4_figures.py`, and the banner from `docs/figures/src/make_banner.py`.
 
 ---
 

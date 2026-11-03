@@ -17,7 +17,7 @@ Gemma 3 1B with its FFNs replaced by MobileMoE-M's MoE blocks. Colour code in ev
 ![Hybrid end to end](figures/fig1_end_to_end.png)
 
 $$
-X^{(0)} = \sqrt{1152}\,E_A[t], \qquad X^{(l)} = \mathrm{Layer}^{\mathrm{hyb}}_l\big(X^{(l-1)}\big), \qquad P = \mathrm{softmax}\big(N_f(X^{(26)})\,E_A^{\top}\big)
+X^{(0)} = \sqrt{1152}\thinspace E_A[t], \qquad X^{(l)} = \mathrm{Layer}^{\mathrm{hyb}}_l\big(X^{(l-1)}\big), \qquad P = \mathrm{softmax}\big(N_f(X^{(26)})\thinspace E_A^{\top}\big)
 $$
 
 Embeddings, attention, norms and the LM head stay Gemma's and stay frozen. MobileMoE contributes only its pre-MoE norms, routers and experts. Every arrow outside the FFN slot carries a Gemma-shaped tensor.
@@ -35,7 +35,7 @@ $$
 The transplant takes the FFN slot (card `eq02_replace`):
 
 $$
-h^{\mathrm{out}}_t = h_t + P_A\Big(W_{out}\;\mathrm{MoE}_B\big(N_B(W_{in}\,x_t)\big)\Big), \qquad x_t = N_A(h_t) \in \mathbb{R}^{1152}
+h^{\mathrm{out}}_t = h_t + P_A\Big(W_{out}\ \mathrm{MoE}_B\big(N_B(W_{in}\thinspace x_t)\big)\Big), \qquad x_t = N_A(h_t) \in \mathbb{R}^{1152}
 $$
 
 Read it right to left: translate Gemma's state into MobileMoE's coordinates, let MobileMoE's norm and experts work there, translate back. H1 asks whether that round trip can stand in for the 23.9M-parameter FFN Gemma was trained with. In code this is `ReplaceFFN` in `src/transplant/models/surgery.py`; it sits at `layer.mlp`, so Gemma's own `pre_feedforward_layernorm` (N_A) and `post_feedforward_layernorm` (P_A) are untouched.
@@ -47,11 +47,11 @@ Read it right to left: translate Gemma's state into MobileMoE's coordinates, let
 Cards `eq03_router` and `eq04_moe_output`:
 
 $$
-\hat u_t = N_B(u_t), \qquad s_t = \sigma(W_r\,\hat u_t) \in (0,1)^{60}, \qquad \mathcal{T}_t = \mathrm{TopK}(s_t + b, 4), \qquad g_{t,e} = 2.5\,\frac{s_{t,e}}{\sum_{e' \in \mathcal{T}_t} s_{t,e'}}
+\hat u_t = N_B(u_t), \qquad s_t = \sigma(W_r\thinspace\hat u_t) \in (0,1)^{60}, \qquad \mathcal{T}_t = \mathrm{TopK}(s_t + b, 4), \qquad g_{t,e} = 2.5\thinspace\frac{s_{t,e}}{\sum_{e' \in \mathcal{T}_t} s_{t,e'}}
 $$
 
 $$
-m_t = S(\hat u_t) + \sum_{e \in \mathcal{T}_t} g_{t,e}\,E_e(\hat u_t)
+m_t = S(\hat u_t) + \sum_{e \in \mathcal{T}_t} g_{t,e}\thinspace E_e(\hat u_t)
 $$
 
 In MobileMoE's code (read at M0) each of the 60 experts runs on exactly the tokens routed to it, with no capacity limit, so routing is dropless; b is a fixed per-expert bias that shifts which experts are selected but not their weights, and the chosen four's weights sum to 2.5 (MobileMoE's routed scaling factor). The block computes its router logits itself in fp32 and returns its output flattened to (tokens, 1024); the wrapper restores the shape and reads the logits from the block's output for the routing diagnostics. On the Apple GPU the repo runs the same arithmetic through `bucketed_moe_forward`: the token groups of the experts are padded to a few fixed sizes, so the GPU sees few tensor shapes and waits for the host once per layer instead of once per expert.
@@ -63,7 +63,7 @@ The router is frozen, so W_in alone decides which 4 of the 60 experts each token
 Cards `eq05_projection` and `eq06_rmsnorm_scale`:
 
 $$
-u_t = W_{in}\,x_t, \qquad N(z) = \frac{z}{\sqrt{\frac{1}{d}\sum_c z_c^2 + \epsilon}} \odot \gamma, \qquad N_B(\alpha W_{in}x_t) \approx N_B(W_{in}x_t), \quad P_A(\alpha W_{out}m_t) \approx P_A(W_{out}m_t)
+u_t = W_{in}\thinspace x_t, \qquad N(z) = \frac{z}{\sqrt{\frac{1}{d}\sum_c z_c^2 + \epsilon}} \odot \gamma, \qquad N_B(\alpha W_{in}x_t) \approx N_B(W_{in}x_t), \quad P_A(\alpha W_{out}m_t) \approx P_A(W_{out}m_t)
 $$
 
 An RMSNorm sits right after each projection (N_B after W_in, P_A after W_out), so only the direction of what each projection produces reaches the next stage. The local-matching MSE also penalises length errors that P_A discards; `local.loss: nmse_post_norm` compares P_A(ŷ) with P_A(y) instead.
@@ -87,7 +87,7 @@ Rows of X are Gemma's N_A(h); rows of Y are MobileMoE's MoE-block inputs on the 
 Every run spends its first 25% of tokens on local matching and the other 75% end to end; each token is read once. Local matching (card `eq09_local_matching`), normalized MSE pooled over the batch:
 
 $$
-\mathcal{L}_1 = \frac{\sum_t \Vert \hat y_t - y_t\Vert^2}{\sum_t \Vert y_t\Vert^2}, \qquad \hat y_t = W_{out}\,\mathrm{MoE}_B\big(N_B(W_{in}x_t)\big), \qquad y_t = \mathrm{FFN}_A(x_t)
+\mathcal{L}_1 = \frac{\sum_t \Vert \hat y_t - y_t\Vert^2}{\sum_t \Vert y_t\Vert^2}, \qquad \hat y_t = W_{out}\thinspace\mathrm{MoE}_B\big(N_B(W_{in}x_t)\big), \qquad y_t = \mathrm{FFN}_A(x_t)
 $$
 
 Predicting zero, which is what the ablated layer does, scores exactly 1. One Gemma forward pass (its own FFNs in place, no gradient) supplies x_i and y_i for all 26 layers at once; layers then train independently, each with its own gradient clipping.
@@ -95,7 +95,7 @@ Predicting zero, which is what the ablated layer does, scores exactly 1. One Gem
 End to end (card `eq10_end_to_end`):
 
 $$
-\mathcal{L}_2 = \mathrm{CE}(y, p_{hyb}) + \beta\,\mathrm{KL}(p_A \Vert p_{hyb}), \qquad \beta = 1
+\mathcal{L}_2 = \mathrm{CE}(y, p_{hyb}) + \beta\thinspace\mathrm{KL}(p_A \Vert p_{hyb}), \qquad \beta = 1
 $$
 
 β = 1 because the goal is recovery: drifting away from Gemma counts as error. p_A comes from a no-grad pass of the same model with the transplants switched off. Both terms are computed 256 positions at a time: logits for 1,024 tokens would take 1.07 GB in fp32, a chunk takes 0.27 GB. The backward pass is written by hand (`_FusedCEKL` in `src/transplant/train/losses.py`): it recomputes the chunk's logits and turns them into the gradient in place, dL/dz = (g_CE + g_KL) softmax(z) − g_CE onehot(y) − g_KL p_A, so at most two fp32 logit buffers are alive at once.
