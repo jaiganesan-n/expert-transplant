@@ -599,7 +599,11 @@ The verdict rule was set before the run, on the final CE gap of the validation m
 | Q/A: correct | 28 / 30 | 10 / 30 | 3 / 30 | −7 |
 | Q/A: fact log-prob (fact recovery) | −0.23 (100%) | −1.82 (89%) | −2.93 (81%) | −1.11 |
 
+![Stage 5 final evaluation](docs/figures/results/stage5_final_eval.png)
+
 The right fact is more likely with the pretrained experts for 29 of 30 questions (sign test p = 6 × 10⁻⁸). Seven are answered only with them (Paris, Portuguese, the heart, gravity, 12 months, Shakespeare, 1945), none only with random experts. By topic, the pretrained experts raise the fact log-probability per token by 1.6 nats in geography, 1.2 in science and history, 1.1 in everyday questions, and 0.1 in arithmetic, which neither run can do. Full report: [results/stage5_compare.md](results/stage5_compare.md).
+
+![Fact log-probability, pretrained against random experts](docs/figures/results/qa_stage4_5.png)
 
 ### 7.2 The learning curves: the same tokens, in the same order, with the same schedule
 
@@ -617,6 +621,8 @@ The right fact is more likely with the pretrained experts for 29 of 30 questions
 
 Checks on 100k held-out tokens, at the same steps of both runs. In the first 5M tokens the trained projections make up part of the difference (+0.44 → +0.30); in the last 10M they make up none of it, and it stays at +0.28 to +0.29 while both gaps keep falling. In tokens, the random-expert hybrid at 14.75M is where the pretrained one was at about 4M (3.7 ×; read off checks that sit at different points of the learning-rate schedule, so rough).
 
+![Stage 5 at matched tokens](docs/figures/results/stage5_matched_tokens.png)
+
 ### 7.3 Routing
 
 | Final evaluation, 20 MoE layers | Stage 4, pretrained experts | Stage 5, random experts |
@@ -628,6 +634,8 @@ Checks on 100k held-out tokens, at the same steps of both runs. In the first 5M 
 
 With random experts routing is narrow from the first check (lowest entropy 0.64 at 1.6M tokens) and stays there, below the 0.7 alarm in most layers: a property of the random blocks, not a collapse during training. The one layer where random experts route more evenly is Gemma layer 0 (0.80 against 0.72), where the pretrained experts concentrate most. That is a hint, not a test, that the early-layer concentration of Stages 1-4 comes from what the pretrained routers learned (token identity on the Llama 3 tokenizer), as Section 6.9 guessed.
 
+![Routing health, Stages 4 and 5](docs/figures/results/routing_stage4_5.png)
+
 ### What Stage 5 showed
 
 - **H3: yes, the pretrained experts contributed.** +0.29 nats on the mix, three times the margin set before the run, with everything else identical and both arms checked on the real models: 13 of 13 checks on the random blocks (`scripts/verify_stage5_random.py`), 10 of 10 on Stage 4's (`scripts/verify_stage4_inference.py`: MobileMoE-S's checkpoint bit for bit, nothing initialised at random). The difference is as large on WikiText-103 and C4 (+0.33, +0.30), so it is not a by-product of training on MobileMoE's own pre-training mix.
@@ -635,13 +643,6 @@ With random experts routing is narrow from the first check (lowest entropy 0.64 
 - **Most of the repair does not need pretrained experts.** Random blocks with trained projections bring the CE gap from 13.09 (all 26 deleted) or 18.31 (the layout floor) down to 1.11: `GR_CE` 0.915, fact recovery 81%. What turns a Gemma without FFNs back into a language model is mostly Gemma's own frozen parts (attention, embeddings, the 6 kept FFNs, the head) and 35.4M trained parameters that put a well-formed vector back into every FFN slot, through a frozen nonlinear block. The pretrained experts then cut the remaining gap by 27% on the mix (1.110 → 0.815) and by 20-22% on unlike text.
 - **Stage 4's reading needs correcting.** Stage 4 matched Stage 3 with a much weaker donor, which looked as if the experts did not matter much. With random experts the same layout is at 1.14 after 14.75M tokens, behind all 26 layers with MobileMoE-M's pretrained experts at the same tokens (0.92). MobileMoE-S's experts are part of why Stage 4 matches Stage 3.
 - **A per-layer linear check cannot see the difference.** Before training, ridge W_out reproduces Gemma's FFN output as well through the random blocks as through the pretrained ones (validation NMSE, mean of 20 layers: 0.312 and 0.312, per-layer differences of both signs). The 0.29 nats appear only when all 20 layers train end to end together, so a local imitation score does not tell whether a donor's experts help.
-
-### What Stage 5 does not answer
-
-- **How much the projections do on their own.** In Stage 5 the trained projections still work through a frozen nonlinear block of 56.7M random parameters per layer, which they can use as random features: "random experts" is not "no experts". The share of the projections alone needs a block-free control, the same slots with the MoE block removed, $F_l(x) = W_{out}\,N_S(W_{in}\,x)$: the same 35.4M trained parameters as a rank-768 map per layer.
-- **Stored knowledge or a block that can be routed.** Random blocks lose both what the experts compute and a router matched to them and to their input (344 dead experts against 29). This run cannot say how much of the 0.29 nats is which; pretrained experts behind a random router, or the reverse, would separate the two.
-- **One random draw, one donor, one budget.** Seed 0 only: the last six checks agree to ±0.004 nats, but the spread between draws is not measured ([docs/stage5.md](docs/stage5.md) has the command for a second draw). MobileMoE-S in layout `spread` only, not MobileMoE-M in all 26 layers. 15M tokens: nothing between 5M and 15M suggests the gap closes, but a much longer run might. Random means i.i.d. with each pretrained matrix's mean and std; a control that also kept each matrix's spectrum would be stricter.
-
 ---
 
 ## Run it
@@ -697,14 +698,14 @@ expert-transplant/
 │                 ask_stages.sh, progress.py, env.sh
 ├── tests/
 ├── docs/         architecture.md, usage.md, stage4.md, stage5.md, figures/ (banner, 4 architecture figures, 13 equation cards,
-│                 stage4/ architecture and equations, results/ charts of Stages 1-4)
+│                 stage4/ architecture and equations, results/ charts of Stages 1-5)
 ├── notes/        local run logs (git-ignored)
 └── results/      runs.csv, qa_compare.md, stage4_compare.md, stage5_compare.md
 ```
 
 ## Licenses
 
-Code: Apache 2.0 (`LICENSE`). Models and datasets keep their own terms; `THIRD_PARTY_LICENSES.md` summarizes those of Stages 1-3: MobileMoE-M-Base is non-commercial research only, Gemma has its own terms, and Natural Reasoning is CC-BY-NC-4.0. MobileMoE-S-Base, used in Stage 4 and not listed there, is gated separately under the same FAIR Noncommercial Research License. Trained projections are derived from Gemma and the MobileMoE model they were trained with; share them only as those licenses allow. The charts in `docs/figures/results/` are drawn from the run files of Stages 1 to 4; `docs/figures/stage4/` comes from `docs/figures/src/make_stage4_figures.py`, and the banner from `docs/figures/src/make_banner.py`.
+Code: Apache 2.0 (`LICENSE`). Models and datasets keep their own terms; `THIRD_PARTY_LICENSES.md` summarizes those of Stages 1-3: MobileMoE-M-Base is non-commercial research only, Gemma has its own terms, and Natural Reasoning is CC-BY-NC-4.0. MobileMoE-S-Base, used in Stage 4 and not listed there, is gated separately under the same FAIR Noncommercial Research License. Trained projections are derived from Gemma and the MobileMoE model they were trained with; share them only as those licenses allow. The charts in `docs/figures/results/` are drawn from the run files of Stages 1 to 5 (Stage 5's by `docs/figures/src/make_stage5_figures.py`); `docs/figures/stage4/` comes from `docs/figures/src/make_stage4_figures.py`, and the banner from `docs/figures/src/make_banner.py`.
 
 ---
 
